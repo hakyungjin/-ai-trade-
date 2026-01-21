@@ -15,6 +15,11 @@ from .technical_indicators import TechnicalIndicators
 
 logger = logging.getLogger(__name__)
 
+# 가중치 설정 지연 로드 (순환 참조 방지)
+def _get_weight_config():
+    from .weight_config import get_weight_config
+    return get_weight_config()
+
 
 class Signal(Enum):
     """매매 신호 열거형"""
@@ -44,7 +49,16 @@ class WeightedStrategy:
         }
 
         self.config = config or {}
-        self.weights = self.config.get('weights', self.default_weights)
+
+        # 가중치 로드: config > weight_config > default
+        if 'weights' in self.config:
+            self.weights = self.config['weights']
+        else:
+            try:
+                weight_config = _get_weight_config()
+                self.weights = weight_config.get_weights()
+            except:
+                self.weights = self.default_weights
 
         # 신호 임계값
         self.thresholds = self.config.get('thresholds', {
@@ -55,6 +69,15 @@ class WeightedStrategy:
         })
 
         logger.info(f"Initialized WeightedStrategy with weights: {self.weights}")
+
+    def refresh_weights(self):
+        """가중치 새로고침 (Admin에서 변경 후)"""
+        try:
+            weight_config = _get_weight_config()
+            self.weights = weight_config.get_weights()
+            logger.info(f"Weights refreshed: {self.weights}")
+        except Exception as e:
+            logger.error(f"Failed to refresh weights: {e}")
 
     def calculate_indicator_scores(self, df: pd.DataFrame) -> pd.DataFrame:
         """
