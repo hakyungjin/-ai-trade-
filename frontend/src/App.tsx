@@ -5,6 +5,7 @@ import { Dashboard } from './components/Dashboard';
 import { TradingPanel } from './components/TradingPanel';
 import { AISettings } from './components/AISettings';
 import { TradeHistory } from './components/TradeHistory';
+import { SignalsPage } from './components/signals/SignalsPage';
 
 const queryClient = new QueryClient();
 
@@ -15,6 +16,7 @@ function App() {
         <Routes>
           <Route path="/" element={<Layout />}>
             <Route index element={<Dashboard />} />
+            <Route path="signals" element={<SignalsPage />} />
             <Route path="trading" element={<TradingPanel />} />
             <Route path="ai-settings" element={<AISettings />} />
             <Route path="history" element={<TradeHistory />} />
