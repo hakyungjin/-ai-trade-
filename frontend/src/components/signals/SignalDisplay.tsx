@@ -2,8 +2,9 @@
  * 실시간 신호 표시 컴포넌트
  */
 
-import React from 'react';
-import { TrendingUp, TrendingDown, Minus, Activity } from 'lucide-react';
+import React, { useState } from 'react';
+import { TrendingUp, TrendingDown, Minus, Activity, ChevronDown, ChevronUp } from 'lucide-react';
+import { SignalComparison } from './SignalComparison';
 
 interface SignalData {
   symbol: string;
@@ -13,6 +14,10 @@ interface SignalData {
   strength: 'very_strong' | 'strong' | 'moderate' | 'weak' | 'very_weak';
   confidence: number;
   score: number;
+  weighted_signal?: string;
+  weighted_confidence?: number;
+  ai_signal?: string | null;
+  ai_confidence?: number | null;
   recommendation: {
     action: string;
     strength: string;
@@ -34,6 +39,8 @@ interface SignalDisplayProps {
 }
 
 export const SignalDisplay: React.FC<SignalDisplayProps> = ({ signal, onClick }) => {
+  const [showComparison, setShowComparison] = useState(false);
+
   // 신호 색상
   const getSignalColor = (signalType: string) => {
     switch (signalType) {
@@ -124,8 +131,7 @@ export const SignalDisplay: React.FC<SignalDisplayProps> = ({ signal, onClick })
 
   return (
     <div
-      className="bg-white rounded-lg shadow-md border border-gray-200 p-4 hover:shadow-lg transition-shadow cursor-pointer"
-      onClick={onClick}
+      className="bg-white rounded-lg shadow-md border border-gray-200 p-4 hover:shadow-lg transition-shadow"
     >
       {/* 헤더 */}
       <div className="flex items-center justify-between mb-4">
@@ -214,6 +220,37 @@ export const SignalDisplay: React.FC<SignalDisplayProps> = ({ signal, onClick })
               }`}>
                 {signal.indicators.macd.signal}
               </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 전략 비교 버튼 */}
+      {signal.weighted_signal && (
+        <div className="mt-4">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowComparison(!showComparison);
+            }}
+            className="w-full flex items-center justify-center gap-2 py-2 px-4 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors text-sm font-semibold text-gray-700"
+          >
+            {showComparison ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            전략 비교 {showComparison ? '접기' : '펼치기'}
+          </button>
+
+          {/* 비교 섹션 */}
+          {showComparison && (
+            <div className="mt-4 pt-4 border-t border-gray-200" onClick={(e) => e.stopPropagation()}>
+              <SignalComparison
+                weightedSignal={signal.weighted_signal}
+                weightedConfidence={signal.weighted_confidence || 0}
+                aiSignal={signal.ai_signal}
+                aiConfidence={signal.ai_confidence}
+                finalSignal={signal.signal}
+                finalConfidence={signal.confidence}
+                finalScore={signal.score}
+              />
             </div>
           )}
         </div>
