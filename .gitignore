@@ -1,0 +1,89 @@
+# 환경 변수
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyTorch models
+*.pt
+*.pth
+models/*.pt
+ai-model/models/*.pt
+
+# 데이터 파일
+*.csv
+data/
+*.db
+*.sqlite
+
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+dist/
+build/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS
+Thumbs.db
+.DS_Store
+
+# 프로젝트 특정
+trading_settings.json
+history.json
+*.log
+.cache/
+
+# 테스트
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Vite
+dist/
+.cache/
+
+# Frontend
+frontend/dist/
+frontend/.cache/
+
+# Backend
+backend/trading.db
