@@ -6,6 +6,8 @@ import {
   History,
   Bot,
   Menu,
+  Activity,
+  Settings,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
@@ -17,7 +19,9 @@ export function Layout() {
 
   const navItems = [
     { to: '/', icon: LayoutDashboard, label: '대시보드' },
+    { to: '/signals', icon: Activity, label: '실시간 신호' },
     { to: '/trading', icon: TrendingUp, label: '매매' },
+    { to: '/admin', icon: Settings, label: 'Admin' },
     { to: '/ai-settings', icon: Bot, label: 'AI 설정' },
     { to: '/history', icon: History, label: '거래 내역' },
   ];

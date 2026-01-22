@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import trading, ai_signal, settings, realtime
+from app.api import trading, ai_signal, settings, realtime, signals, admin
 from app.config import get_settings
 
 app = FastAPI(
@@ -23,6 +23,8 @@ app.include_router(trading.router, prefix="/api/trading", tags=["Trading"])
 app.include_router(ai_signal.router, prefix="/api/ai", tags=["AI Signal"])
 app.include_router(settings.router, prefix="/api/settings", tags=["Settings"])
 app.include_router(realtime.router, prefix="/api/realtime", tags=["Realtime"])
+app.include_router(signals.router, prefix="/api/signals", tags=["Signals"])
+app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
 
 
 @app.get("/")
