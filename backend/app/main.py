@@ -1,19 +1,63 @@
 from contextlib import asynccontextmanager
+import asyncio
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import trading, ai_signal, settings, realtime, signals, admin, market, realtime_chart, data
+from app.api import trading, ai_signal, settings, realtime, signals, admin, market, realtime_chart, data, coins
 from app.config import get_settings
 from app.database import init_db, close_db
 from app.services.binance_stream import binance_stream_manager
+from app.services.binance_service import BinanceService
+from app.services.batch_candle_collector import BatchCandleCollector
+
+logger = logging.getLogger(__name__)
+
+# 배치 수집기 인스턴스
+batch_collector: BatchCandleCollector = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """앱 시작/종료 시 DB 연결 및 스트림 관리"""
+    global batch_collector
+    
     await init_db()
+    
+    # 배치 캔들 수집기 초기화 및 시작
+    try:
+        config = get_settings()
+        binance = BinanceService(
+            api_key=config.binance_api_key,
+            secret_key=config.binance_secret_key,
+            testnet=config.binance_testnet
+        )
+        batch_collector = BatchCandleCollector(binance)
+        
+        # 백그라운드 작업으로 주기적 수집 시작 (1시간마다)
+        # 앱이 시작되면 첫 수집은 지연시키기 (5초 후)
+        asyncio.create_task(delayed_collection_start(batch_collector, delay=5))
+        logger.info("✅ Batch candle collector initialized")
+    except Exception as e:
+        logger.error(f"❌ Error initializing batch collector: {e}")
+    
     yield
+    
+    # 종료 시
+    if batch_collector:
+        batch_collector.stop_periodic_collection()
     await binance_stream_manager.shutdown()
     await close_db()
+
+
+async def delayed_collection_start(collector: BatchCandleCollector, delay: int = 5):
+    """지연 후 주기적 수집 시작"""
+    await asyncio.sleep(delay)
+    logger.info("🚀 Starting background candle collection...")
+    await collector.start_periodic_collection(
+        interval="1h",
+        limit=500,
+        collect_interval_hours=1
+    )
 
 app = FastAPI(
     title="Crypto AI Trader",
@@ -40,6 +84,7 @@ app.include_router(signals.router, prefix="/api/signals", tags=["Signals"])
 app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
 app.include_router(market.router, prefix="/api/market", tags=["Market"])
 app.include_router(realtime_chart.router, prefix="/api/chart", tags=["Realtime Chart"])
+app.include_router(coins.router)  # coins API는 /api/v1/coins 접두사 포함
 app.include_router(data.router)
 
 

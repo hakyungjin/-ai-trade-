@@ -1,16 +1,16 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Text, JSON, Index
+from sqlalchemy import Column, Integer, String, Float, DateTime, Text, JSON, Index, UniqueConstraint
 from sqlalchemy.sql import func
 from app.database import Base
 
 
 class MarketCandle(Base):
-    """캔들 데이터 (OHLCV)"""
+    """캔들 데이터 (OHLCV) - 최적화된 인덱싱"""
     __tablename__ = "market_candles"
 
     id = Column(Integer, primary_key=True, index=True)
-    symbol = Column(String(20), nullable=False)
-    timeframe = Column(String(10), nullable=False)  # 1m, 5m, 15m, 1h, 4h, 1d
-    open_time = Column(DateTime, nullable=False)
+    symbol = Column(String(20), nullable=False, index=True)
+    timeframe = Column(String(10), nullable=False, index=True)  # 1m, 5m, 15m, 1h, 4h, 1d
+    open_time = Column(DateTime, nullable=False, index=True)
     open = Column(Float, nullable=False)
     high = Column(Float, nullable=False)
     low = Column(Float, nullable=False)
@@ -22,7 +22,14 @@ class MarketCandle(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (
+        # 기존 복합 인덱스
         Index('idx_candle_symbol_time', 'symbol', 'timeframe', 'open_time'),
+        # ✅ 추가 최적화 인덱스
+        Index('idx_candle_symbol_tf_time_desc', 'symbol', 'timeframe', 'open_time', mysql_length={'symbol': 10}),
+        Index('idx_candle_symbol_time_desc', 'symbol', 'open_time'),
+        Index('idx_candle_time_desc', 'open_time'),
+        # 중복 방지 (같은 심볼/타임프레임/시간의 캔들 중복 저장 방지)
+        UniqueConstraint('symbol', 'timeframe', 'open_time', name='uq_candle_symbol_tf_time'),
     )
 
 

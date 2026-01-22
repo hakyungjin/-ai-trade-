@@ -3,15 +3,19 @@
 - 증분 데이터 수집
 - 데이터 커버리지 확인
 - 수동 동기화
+- 배치 캔들 수집
 """
 
+import asyncio
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.services.binance_service import BinanceService
 from app.services.incremental_collector import IncrementalDataCollector
+from app.services.batch_candle_collector import BatchCandleCollector
 from app.config import get_settings
 
 settings = get_settings()
@@ -27,6 +31,20 @@ binance_service = BinanceService(
     secret_key=settings.binance_secret_key,
     testnet=False
 )
+
+# 배치 수집 모델
+class BatchCollectRequest(BaseModel):
+    """배치 캔들 수집 요청"""
+    interval: str = "1h"  # 캔들 주기
+    limit: int = 500  # 각 심볼당 수집 개수
+    symbols: Optional[List[str]] = None  # 특정 심볼만 수집 (None이면 모두)
+
+
+class HistoricalDataRequest(BaseModel):
+    """과거 데이터 수집 요청"""
+    symbol: str
+    interval: str = "1h"
+    days: int = 365
 
 
 @router.post("/sync/{symbol}")
@@ -242,6 +260,139 @@ async def check_last_saved_time(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/batch-collect")
+async def batch_collect_candles(
+    request: BatchCollectRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    모든 활성 심볼의 캔들을 배치로 수집
+    
+    벡터 DB 학습 데이터 축적용
+    
+    Args:
+        request.interval: 캔들 주기 (1m, 5m, 15m, 1h, 4h, 1d)
+        request.limit: 각 심볼당 수집할 캔들 개수
+        request.symbols: 특정 심볼만 수집할 경우 지정 (기본값: 모든 활성 심볼)
+    
+    Example:
+    - POST /api/v1/data/batch-collect
+    - POST /api/v1/data/batch-collect
+      Body: {
+        "interval": "1h",
+        "limit": 500,
+        "symbols": ["BTCUSDT", "ETHUSDT"]
+      }
+    """
+    try:
+        collector = BatchCandleCollector(binance_service)
+        
+        # 특정 심볼 수집 또는 모든 활성 심볼 수집
+        if request.symbols:
+            results = {}
+            for symbol in request.symbols:
+                count = await collector.collect_candles_for_symbol(
+                    symbol=symbol,
+                    interval=request.interval,
+                    limit=request.limit,
+                    db=db
+                )
+                results[symbol] = count
+                await asyncio.sleep(0.5)  # 레이트 리미팅
+            
+            return {
+                "success": True,
+                "message": f"Collected candles for {len(request.symbols)} symbols",
+                "interval": request.interval,
+                "results": results,
+                "total_saved": sum(results.values())
+            }
+        else:
+            results = await collector.collect_all_symbols(
+                interval=request.interval,
+                limit=request.limit
+            )
+            
+            return {
+                "success": True,
+                "message": f"Collected candles for {len(results)} active symbols",
+                "interval": request.interval,
+                "results": results,
+                "total_saved": sum(results.values())
+            }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Batch collection error: {str(e)}")
+
+
+@router.post("/collect-historical")
+async def collect_historical_data(
+    request: HistoricalDataRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    특정 심볼의 과거 데이터 수집
+    
+    Args:
+        request.symbol: 거래 쌍 (예: BTCUSDT)
+        request.interval: 캔들 주기 (기본값: 1h)
+        request.days: 과거 몇 일 데이터 (기본값: 365)
+    
+    Example:
+    - POST /api/v1/data/collect-historical
+      Body: {
+        "symbol": "BTCUSDT",
+        "interval": "1h",
+        "days": 365
+      }
+    """
+    try:
+        collector = BatchCandleCollector(binance_service)
+        count = await collector.collect_historical_data(
+            symbol=request.symbol,
+            interval=request.interval,
+            days=request.days
+        )
+        
+        return {
+            "success": True,
+            "message": f"Collected historical data for {request.symbol}",
+            "symbol": request.symbol,
+            "interval": request.interval,
+            "days": request.days,
+            "saved_count": count
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Historical collection error: {str(e)}")
+
+
+@router.post("/collect-daily-snapshot")
+async def collect_daily_snapshot(
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    모든 활성 심볼의 일일 스냅샷 수집 (1d 봉)
+    
+    Example:
+    - POST /api/v1/data/collect-daily-snapshot
+    """
+    try:
+        collector = BatchCandleCollector(binance_service)
+        results = await collector.collect_daily_snapshot()
+        
+        return {
+            "success": True,
+            "message": "Collected daily snapshots for all active symbols",
+            "interval": "1d",
+            "results": results,
+            "total_saved": sum(results.values())
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Snapshot collection error: {str(e)}")
+
+
 # 사용 예시
 """
 1. 단일 심볼 데이터 동기화:
@@ -260,6 +411,25 @@ async def check_last_saved_time(
 4. 마지막 저장 시간 확인:
    POST /api/v1/data/check-last-saved?symbol=BTCUSDT&timeframe=1h
 
-5. 전체 데이터 강제 재수집 (오래된 방법으로 수집하지 않음):
-   POST /api/v1/data/sync/BTCUSDT?timeframe=1h&force_full=true
+5. 배치 캔들 수집 (모든 활성 심볼):
+   POST /api/v1/data/batch-collect
+
+6. 배치 캔들 수집 (특정 심볼):
+   POST /api/v1/data/batch-collect
+   Body: {
+       "interval": "1h",
+       "limit": 500,
+       "symbols": ["BTCUSDT", "ETHUSDT", "BNBUSDT"]
+   }
+
+7. 과거 데이터 수집:
+   POST /api/v1/data/collect-historical
+   Body: {
+       "symbol": "BTCUSDT",
+       "interval": "1h",
+       "days": 365
+   }
+
+8. 일일 스냅샷 수집:
+   POST /api/v1/data/collect-daily-snapshot
 """

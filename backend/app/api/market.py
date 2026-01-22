@@ -160,6 +160,132 @@ async def search_symbols(query: str = Query(..., min_length=1)):
     }
 
 
+@router.get("/search/all")
+async def search_all_symbols(
+    query: str = Query(..., min_length=1),
+    limit: int = Query(100, ge=1, le=500),
+    quote_asset: str = Query("USDT", pattern="^[A-Z]+$")
+):
+    """
+    모든 심볼 검색 (알트코인 포함)
+    
+    Args:
+        query: 검색어 (예: BTC, ETH, DOGE)
+        limit: 최대 결과 개수 (1-500)
+        quote_asset: 쿼트 자산 (기본값: USDT)
+    
+    Returns:
+        검색된 심볼 목록 (시세 정보 포함)
+    """
+    binance = get_binance_service()
+    symbols = await binance.search_symbols_advanced(query, quote_asset=quote_asset, limit=limit)
+
+    return {
+        "success": True,
+        "data": symbols,
+        "total": len(symbols),
+        "query": query,
+        "quoteAsset": quote_asset,
+        "timestamp": datetime.now().isoformat()
+    }
+
+
+@router.get("/search/trending")
+async def get_trending_symbols(
+    limit: int = Query(50, ge=1, le=500),
+    quote_asset: str = Query("USDT", pattern="^[A-Z]+$")
+):
+    """
+    거래량 기준 상위 심볼 조회 (트렌딩 코인)
+    
+    Args:
+        limit: 최대 결과 개수 (1-500)
+        quote_asset: 쿼트 자산 (기본값: USDT)
+    
+    Returns:
+        거래량 상위 심볼 목록
+    """
+    binance = get_binance_service()
+    symbols = await binance.get_top_symbols_by_volume(limit=limit, quote_asset=quote_asset)
+
+    return {
+        "success": True,
+        "data": symbols,
+        "total": len(symbols),
+        "quoteAsset": quote_asset,
+        "sortBy": "volume",
+        "timestamp": datetime.now().isoformat()
+    }
+
+
+@router.get("/search/altcoins")
+async def search_altcoins(
+    query: str = Query("", min_length=0),
+    limit: int = Query(100, ge=1, le=500),
+    exclude_major: bool = Query(True)
+):
+    """
+    알트코인 검색 (BTC, ETH 제외 옵션)
+    
+    Args:
+        query: 검색어 (빈 문자열 = 모든 알트코인)
+        limit: 최대 결과 개수
+        exclude_major: 메이저 코인 제외 여부
+    
+    Returns:
+        알트코인 목록
+    """
+    binance = get_binance_service()
+    symbols = await binance.search_symbols_advanced(query or "", limit=limit)
+    
+    # 메이저 코인 제외 필터
+    if exclude_major:
+        major_coins = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT']
+        symbols = [s for s in symbols if s['symbol'] not in major_coins]
+    
+    # 가격 변동률로 정렬 (상위부터 내림차순)
+    symbols.sort(key=lambda x: abs(x.get('priceChangePercent', 0)), reverse=True)
+
+    return {
+        "success": True,
+        "data": symbols,
+        "total": len(symbols),
+        "query": query or "all",
+        "excludeMajor": exclude_major,
+        "timestamp": datetime.now().isoformat()
+    }
+
+
+@router.get("/symbols/list")
+async def get_all_symbols(
+    quote_asset: str = Query("USDT", pattern="^[A-Z]+$"),
+    limit: int = Query(500, ge=1, le=2000)
+):
+    """
+    모든 심볼 목록 조회 (페이징 포함)
+    
+    Args:
+        quote_asset: 쿼트 자산 (기본값: USDT)
+        limit: 최대 결과 개수
+    
+    Returns:
+        전체 심볼 목록
+    """
+    binance = get_binance_service()
+    all_symbols = await binance.get_all_symbols_with_ticker()
+    
+    # 필터링
+    filtered = [s for s in all_symbols if s['quoteAsset'] == quote_asset]
+    
+    return {
+        "success": True,
+        "data": filtered[:limit],
+        "total": len(filtered),
+        "quoteAsset": quote_asset,
+        "timestamp": datetime.now().isoformat()
+    }
+
+
 @router.get("/overview")
 async def get_market_overview():
     """
@@ -382,7 +508,7 @@ async def websocket_single_ticker(websocket: WebSocket, symbol: str):
 @router.get("/klines/{symbol}")
 async def get_klines(
     symbol: str,
-    interval: str = Query(default="1h", regex="^(1m|5m|15m|30m|1h|4h|1d|1w)$"),
+    interval: str = Query(default="1h", pattern="^(1m|5m|15m|30m|1h|4h|1d|1w)$"),
     limit: int = Query(default=100, ge=1, le=1000),
     db: AsyncSession = Depends(get_db)
 ):

@@ -21,7 +21,7 @@ export function Layout() {
   const navItems = [
     { to: '/', icon: LayoutDashboard, label: '대시보드' },
     { to: '/market', icon: BarChart3, label: '마켓' },
-    { to: '/signals', icon: Activity, label: '실시간 신호' },
+    { to: '/signals', icon: Activity, label: '모니터링' },
     { to: '/trading', icon: TrendingUp, label: '매매' },
     { to: '/admin', icon: Settings, label: 'Admin' },
     { to: '/ai-settings', icon: Bot, label: 'AI 설정' },

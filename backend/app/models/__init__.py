@@ -2,6 +2,7 @@ from app.models.market_data import MarketCandle, TechnicalIndicator, AIAnalysis,
 from app.models.trade import Trade
 from app.models.vector_pattern import VectorPattern, VectorSimilarity
 from app.models.strategy_weights import StrategyWeights
+from app.models.coin import Coin, CoinStatistics, CoinAnalysisConfig, CoinPriceHistory
 
 __all__ = [
     'MarketCandle',
@@ -13,4 +14,8 @@ __all__ = [
     'VectorPattern',
     'VectorSimilarity',
     'StrategyWeights',
+    'Coin',
+    'CoinStatistics',
+    'CoinAnalysisConfig',
+    'CoinPriceHistory',
 ]

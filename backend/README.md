@@ -352,6 +352,92 @@ ws.onmessage = (event) => {
 
 ---
 
+## 데이터베이스 마이그레이션
+
+### 빠른 시작
+
+```bash
+# 모든 마이그레이션 적용
+cd backend
+alembic upgrade head
+```
+
+### 자동 마이그레이션 워크플로우
+
+모델 변경 후 새 마이그레이션 파일 자동 생성:
+
+```bash
+# 1. 모델 파일 수정 (app/models/*.py)
+# 2. 마이그레이션 생성
+cd backend
+alembic revision --autogenerate -m "Add new table or column description"
+
+# 3. 생성된 파일 검토 (alembic/versions/xxx_*.py)
+# 4. 적용
+alembic upgrade head
+```
+
+### 주요 마이그레이션 명령어
+
+| 명령어 | 설명 |
+|--------|------|
+| `alembic upgrade head` | 최신 버전까지 마이그레이션 |
+| `alembic downgrade -1` | 이전 버전으로 롤백 |
+| `alembic current` | 현재 버전 확인 |
+| `alembic history` | 마이그레이션 히스토리 |
+| `alembic revision --autogenerate -m "message"` | 변경사항 자동 감지 후 마이그레이션 생성 |
+
+### 마이그레이션 히스토리
+
+| 마이그레이션 | 설명 | 상태 |
+|-------------|------|------|
+| `2a5a9ea01389_initial_migration` | 초기 테이블 생성 (trades, market_candles) | ✅ |
+| `7d936f1f64d7_add_ai_training_data` | AI 학습 데이터 테이블 추가 | ✅ |
+| `optimize_candle_v1` | market_candles 인덱스 최적화 | ✅ |
+| `add_coin_metadata_v1` | 코인 메타데이터 테이블 (coins, coin_statistics, coin_analysis_configs, coin_price_history) | ✅ |
+
+### 트러블슈팅
+
+#### 마이그레이션 오류: "table already exists"
+```bash
+# 기존 테이블 확인
+alembic current
+
+# 강제로 최신 버전으로 표시 (이미 수동으로 생성된 경우)
+alembic stamp head
+```
+
+#### 마이그레이션 감지 안됨
+Alembic auto-detect가 모든 변경사항을 감지하지 못하는 경우:
+```bash
+# 수동으로 마이그레이션 파일 생성 후 수정
+alembic revision -m "Manual migration description"
+# alembic/versions/xxx_manual_migration_description.py 파일 수정
+```
+
+#### MySQL 문법 오류
+MySQL 특화 문법으로 마이그레이션 작성:
+- `IF NOT EXISTS` 사용 금지 (DROP, CREATE INDEX에서)
+- `VARCHAR` 길이 명시 필수
+- `COLLATE utf8mb4_unicode_ci` 사용
+
+### 개발 환경 데이터 초기화
+
+```bash
+# 모든 테이블 제거 (주의!)
+alembic downgrade base
+
+# 다시 생성
+alembic upgrade head
+```
+
+### 더 자세한 정보
+
+- [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) - 상세 마이그레이션 가이드
+- [CANDLE_DB_OPTIMIZATION.md](CANDLE_DB_OPTIMIZATION.md) - 데이터베이스 최적화 전략
+
+---
+
 ## 주요 설정 (config.py)
 
 | 설정 | 기본값 | 설명 |

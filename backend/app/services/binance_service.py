@@ -305,3 +305,101 @@ class BinanceService:
                 })
 
         return symbols[:50]  # 최대 50개
+
+    async def get_all_usdt_symbols(self) -> List[Dict[str, Any]]:
+        """모든 USDT 거래쌍 조회"""
+        info = await self.get_exchange_info()
+        
+        symbols = []
+        for s in info["symbols"]:
+            if s["status"] == "TRADING" and s["quoteAsset"] == "USDT":
+                symbols.append({
+                    "symbol": s["symbol"],
+                    "baseAsset": s["baseAsset"],
+                    "quoteAsset": s["quoteAsset"],
+                    "status": s["status"]
+                })
+        
+        return symbols
+
+    async def get_all_symbols_with_ticker(self) -> List[Dict[str, Any]]:
+        """모든 USDT 거래쌍과 시세 정보 조회"""
+        info = await self.get_exchange_info()
+        tickers = await self.get_ticker_24h()
+        ticker_map = {t["symbol"]: t for t in tickers}
+        
+        symbols = []
+        for s in info["symbols"]:
+            if s["status"] == "TRADING" and s["quoteAsset"] == "USDT":
+                ticker = ticker_map.get(s["symbol"])
+                if ticker:
+                    symbols.append({
+                        "symbol": s["symbol"],
+                        "baseAsset": s["baseAsset"],
+                        "quoteAsset": s["quoteAsset"],
+                        "price": float(ticker.get("price", 0)),
+                        "priceChange": float(ticker.get("priceChange", 0)),
+                        "priceChangePercent": float(ticker.get("priceChangePercent", 0)),
+                        "volume": float(ticker.get("quoteVolume", 0)),
+                        "trend": "up" if float(ticker.get("priceChangePercent", 0)) > 0 else "down" if float(ticker.get("priceChangePercent", 0)) < 0 else "neutral"
+                    })
+        
+        return symbols
+
+    async def search_symbols_advanced(self, query: str, quote_asset: str = "USDT", limit: int = 100) -> List[Dict[str, Any]]:
+        """고급 심볼 검색 (쿼트 자산 지정 가능)"""
+        info = await self.get_exchange_info()
+        tickers = await self.get_ticker_24h()
+        ticker_map = {t["symbol"]: t for t in tickers}
+        
+        query_upper = query.upper()
+        symbols = []
+        
+        for s in info["symbols"]:
+            # 필터링: TRADING 상태, 지정된 쿼트 자산, 검색어 매칭
+            if (s["status"] == "TRADING" and 
+                s["quoteAsset"] == quote_asset and
+                (query_upper in s["symbol"] or query_upper in s["baseAsset"])):
+                
+                ticker = ticker_map.get(s["symbol"])
+                if ticker:
+                    symbols.append({
+                        "symbol": s["symbol"],
+                        "baseAsset": s["baseAsset"],
+                        "quoteAsset": s["quoteAsset"],
+                        "price": float(ticker.get("price", 0)),
+                        "priceChange": float(ticker.get("priceChange", 0)),
+                        "priceChangePercent": float(ticker.get("priceChangePercent", 0)),
+                        "volume": float(ticker.get("quoteVolume", 0)),
+                        "marketCap": float(ticker.get("quoteVolume", 0)) * float(ticker.get("price", 0)),
+                        "trend": "up" if float(ticker.get("priceChangePercent", 0)) > 0 else "down" if float(ticker.get("priceChangePercent", 0)) < 0 else "neutral"
+                    })
+        
+        return symbols[:limit]
+
+    async def get_top_symbols_by_volume(self, limit: int = 50, quote_asset: str = "USDT") -> List[Dict[str, Any]]:
+        """거래량 기준 상위 심볼 조회"""
+        info = await self.get_exchange_info()
+        tickers = await self.get_ticker_24h()
+        ticker_map = {t["symbol"]: t for t in tickers}
+        
+        symbols = []
+        for s in info["symbols"]:
+            if s["status"] == "TRADING" and s["quoteAsset"] == quote_asset:
+                ticker = ticker_map.get(s["symbol"])
+                if ticker:
+                    symbols.append({
+                        "symbol": s["symbol"],
+                        "baseAsset": s["baseAsset"],
+                        "quoteAsset": s["quoteAsset"],
+                        "price": float(ticker.get("price", 0)),
+                        "priceChange": float(ticker.get("priceChange", 0)),
+                        "priceChangePercent": float(ticker.get("priceChangePercent", 0)),
+                        "volume": float(ticker.get("quoteVolume", 0)),
+                        "marketCap": float(ticker.get("quoteVolume", 0)) * float(ticker.get("price", 0)),
+                        "trend": "up" if float(ticker.get("priceChangePercent", 0)) > 0 else "down" if float(ticker.get("priceChangePercent", 0)) < 0 else "neutral"
+                    })
+        
+        # 거래량으로 정렬
+        symbols.sort(key=lambda x: x["volume"], reverse=True)
+        return symbols[:limit]

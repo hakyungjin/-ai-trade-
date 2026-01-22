@@ -46,6 +46,15 @@ export function PriceChart({ symbol }: PriceChartProps) {
   const [priceChange, setPriceChange] = useState(0);
   const [isConnected, setIsConnected] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  
+  // 지표 표시 토글
+  const [showRSI, setShowRSI] = useState(true);
+  const [showMACD, setShowMACD] = useState(true);
+  const [showBB, setShowBB] = useState(false);
+  
+  // 지표 데이터
+  const [indicators, setIndicators] = useState<any>({});
+  
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
@@ -135,6 +144,12 @@ export function PriceChart({ symbol }: PriceChartProps) {
           if (data.type === 'initial') {
             console.log(`[${symbol} ${selectedInterval}] Received initial data: ${data.data.length} candles`);
             setCandles(data.data);
+            
+            // 지표 데이터 추출 (있으면)
+            if (data.indicators) {
+              setIndicators(data.indicators);
+            }
+            
             if (data.data.length > 0) {
               const latest = data.data[data.data.length - 1];
               const firstCandle = data.data[0];
@@ -429,6 +444,34 @@ export function PriceChart({ symbol }: PriceChartProps) {
             ))}
           </div>
         </div>
+        
+        {/* 지표 토글 버튼 */}
+        <div className="flex gap-2 mt-3">
+          <Button
+            variant={showRSI ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setShowRSI(!showRSI)}
+            className="text-xs"
+          >
+            RSI
+          </Button>
+          <Button
+            variant={showMACD ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setShowMACD(!showMACD)}
+            className="text-xs"
+          >
+            MACD
+          </Button>
+          <Button
+            variant={showBB ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setShowBB(!showBB)}
+            className="text-xs"
+          >
+            Bollinger Bands
+          </Button>
+        </div>
       </CardHeader>
 
       <CardContent>
@@ -564,6 +607,70 @@ export function PriceChart({ symbol }: PriceChartProps) {
                   <Cell key={`body-${index}`} fill={entry.color} />
                 ))}
               </Bar>
+
+              {/* RSI 지표 - 주황색 */}
+              {showRSI && indicators.rsi_14 !== undefined && (
+                <ReferenceLine
+                  yAxisId="price"
+                  y={minPrice + (indicators.rsi_14 / 100) * (maxPrice - minPrice)}
+                  stroke="#f59e0b"
+                  strokeWidth={2}
+                  label={{ value: `RSI: ${indicators.rsi_14?.toFixed(1)}`, fill: '#f59e0b', fontSize: 11 }}
+                />
+              )}
+
+              {/* MACD 지표 - 청색 */}
+              {showMACD && indicators.macd !== undefined && (
+                <>
+                  <ReferenceLine
+                    yAxisId="price"
+                    y={minPrice + ((indicators.macd || 0) / 0.02) * (maxPrice - minPrice)}
+                    stroke="#06b6d4"
+                    strokeWidth={2}
+                    label={{ value: `MACD: ${indicators.macd?.toFixed(4)}`, fill: '#06b6d4', fontSize: 11 }}
+                  />
+                  {indicators.macd_signal !== undefined && (
+                    <ReferenceLine
+                      yAxisId="price"
+                      y={minPrice + ((indicators.macd_signal || 0) / 0.02) * (maxPrice - minPrice)}
+                      stroke="#8b5cf6"
+                      strokeWidth={2}
+                      strokeDasharray="5 5"
+                    />
+                  )}
+                </>
+              )}
+
+              {/* Bollinger Bands - 분홍색/파랑색 */}
+              {showBB && indicators.bb_upper !== undefined && (
+                <>
+                  <ReferenceLine
+                    yAxisId="price"
+                    y={indicators.bb_upper}
+                    stroke="#ec4899"
+                    strokeWidth={1}
+                    strokeDasharray="3 3"
+                  />
+                  {indicators.bb_lower !== undefined && (
+                    <ReferenceLine
+                      yAxisId="price"
+                      y={indicators.bb_lower}
+                      stroke="#3b82f6"
+                      strokeWidth={1}
+                      strokeDasharray="3 3"
+                    />
+                  )}
+                  {indicators.bb_middle !== undefined && (
+                    <ReferenceLine
+                      yAxisId="price"
+                      y={indicators.bb_middle}
+                      stroke="#6b7280"
+                      strokeWidth={1}
+                      strokeDasharray="2 2"
+                    />
+                  )}
+                </>
+              )}
             </ComposedChart>
           </ResponsiveContainer>
         </div>
