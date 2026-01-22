@@ -5,20 +5,46 @@ Admin API 엔드포인트
 - 시스템 설정
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 import logging
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.services.weight_config import get_weight_config
 from app.services.signal_service import RealTimeSignalService
+from app.database import get_db
+from app.models.strategy_weights import StrategyWeights
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+class StrategyWeightUpdate(BaseModel):
+    """전략 가중치 업데이트"""
+    rsi_weight: float = Field(default=0.20, ge=0, le=1)
+    macd_weight: float = Field(default=0.25, ge=0, le=1)
+    bollinger_weight: float = Field(default=0.15, ge=0, le=1)
+    ema_cross_weight: float = Field(default=0.20, ge=0, le=1)
+    stochastic_weight: float = Field(default=0.10, ge=0, le=1)
+    volume_weight: float = Field(default=0.10, ge=0, le=1)
+    
+    # 신호 임계값
+    strong_buy_threshold: float = Field(default=0.6, ge=-1, le=1)
+    buy_threshold: float = Field(default=0.3, ge=-1, le=1)
+    sell_threshold: float = Field(default=-0.3, ge=-1, le=1)
+    strong_sell_threshold: float = Field(default=-0.6, ge=-1, le=1)
+    
+    # 벡터 설정
+    vector_boost_enabled: int = Field(default=1, ge=0, le=1)
+    vector_similarity_threshold: float = Field(default=0.75, ge=0, le=1)
+    vector_k_nearest: int = Field(default=5, ge=1, le=20)
+    max_confidence_boost: float = Field(default=0.15, ge=0, le=0.5)
+
+
 class WeightUpdate(BaseModel):
-    """가중치 업데이트 요청"""
+    """가중치 업데이트 요청 (하위호환성)"""
     rsi: float = Field(ge=0, le=1, description="RSI 가중치 (0-1)")
     macd: float = Field(ge=0, le=1, description="MACD 가중치 (0-1)")
     bollinger: float = Field(ge=0, le=1, description="Bollinger Bands 가중치 (0-1)")
@@ -267,3 +293,168 @@ async def get_system_stats():
     except Exception as e:
         logger.error(f"Error getting system stats: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ===== DB 기반 가중치 관리 =====
+
+@router.get("/strategy-weights")
+async def get_active_weights(db: AsyncSession = Depends(get_db)):
+    """활성 전략 가중치 조회"""
+    try:
+        result = await db.execute(
+            select(StrategyWeights).where(StrategyWeights.active == 1)
+        )
+        weights = result.scalar_one_or_none()
+        
+        if not weights:
+            raise HTTPException(status_code=404, detail="No active weights found")
+        
+        return {
+            'id': weights.id,
+            'name': weights.name,
+            'description': weights.description,
+            'rsi_weight': weights.rsi_weight,
+            'macd_weight': weights.macd_weight,
+            'bollinger_weight': weights.bollinger_weight,
+            'ema_cross_weight': weights.ema_cross_weight,
+            'stochastic_weight': weights.stochastic_weight,
+            'volume_weight': weights.volume_weight,
+            'strong_buy_threshold': weights.strong_buy_threshold,
+            'buy_threshold': weights.buy_threshold,
+            'sell_threshold': weights.sell_threshold,
+            'strong_sell_threshold': weights.strong_sell_threshold,
+            'vector_boost_enabled': weights.vector_boost_enabled,
+            'vector_similarity_threshold': weights.vector_similarity_threshold,
+            'vector_k_nearest': weights.vector_k_nearest,
+            'max_confidence_boost': weights.max_confidence_boost,
+        }
+    except Exception as e:
+        logger.error(f"Error getting active weights: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/strategy-weights/all")
+async def get_all_weights(db: AsyncSession = Depends(get_db)):
+    """모든 전략 가중치 조회"""
+    try:
+        result = await db.execute(select(StrategyWeights))
+        all_weights = result.scalars().all()
+        
+        return [
+            {
+                'id': w.id,
+                'name': w.name,
+                'description': w.description,
+                'active': w.active,
+                'created_at': w.created_at.isoformat(),
+            }
+            for w in all_weights
+        ]
+    except Exception as e:
+        logger.error(f"Error getting all weights: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/strategy-weights/{weight_id}")
+async def update_weights(
+    weight_id: int,
+    update: StrategyWeightUpdate,
+    db: AsyncSession = Depends(get_db)
+):
+    """전략 가중치 업데이트"""
+    try:
+        # 가중치 합 검증
+        weight_sum = (
+            update.rsi_weight + update.macd_weight + update.bollinger_weight +
+            update.ema_cross_weight + update.stochastic_weight + update.volume_weight
+        )
+        
+        if abs(weight_sum - 1.0) > 0.01:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Weights must sum to 1.0, got {weight_sum:.2f}"
+            )
+        
+        # 임계값 검증
+        if update.strong_buy_threshold <= update.buy_threshold:
+            raise HTTPException(status_code=400, detail="strong_buy > buy threshold")
+        if update.buy_threshold <= update.sell_threshold:
+            raise HTTPException(status_code=400, detail="buy > sell threshold")
+        if update.sell_threshold <= update.strong_sell_threshold:
+            raise HTTPException(status_code=400, detail="sell > strong_sell threshold")
+        
+        # DB 업데이트
+        result = await db.execute(select(StrategyWeights).where(StrategyWeights.id == weight_id))
+        weights = result.scalar_one_or_none()
+        
+        if not weights:
+            raise HTTPException(status_code=404, detail="Weights not found")
+        
+        # 모든 필드 업데이트
+        weights.rsi_weight = update.rsi_weight
+        weights.macd_weight = update.macd_weight
+        weights.bollinger_weight = update.bollinger_weight
+        weights.ema_cross_weight = update.ema_cross_weight
+        weights.stochastic_weight = update.stochastic_weight
+        weights.volume_weight = update.volume_weight
+        weights.strong_buy_threshold = update.strong_buy_threshold
+        weights.buy_threshold = update.buy_threshold
+        weights.sell_threshold = update.sell_threshold
+        weights.strong_sell_threshold = update.strong_sell_threshold
+        weights.vector_boost_enabled = update.vector_boost_enabled
+        weights.vector_similarity_threshold = update.vector_similarity_threshold
+        weights.vector_k_nearest = update.vector_k_nearest
+        weights.max_confidence_boost = update.max_confidence_boost
+        
+        await db.commit()
+        logger.info(f"✅ Updated weights ID {weight_id}")
+        
+        return {
+            'success': True,
+            'message': f'Weights updated successfully',
+            'weight_id': weight_id
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating weights: {e}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/strategy-weights/{weight_id}/activate")
+async def activate_weights(weight_id: int, db: AsyncSession = Depends(get_db)):
+    """특정 가중치 설정 활성화"""
+    try:
+        # 기존 활성 가중치 비활성화
+        await db.execute(
+            select(StrategyWeights).where(StrategyWeights.active == 1)
+        )
+        existing = (await db.execute(select(StrategyWeights).where(StrategyWeights.active == 1))).scalar_one_or_none()
+        if existing:
+            existing.active = 0
+        
+        # 새 가중치 활성화
+        result = await db.execute(select(StrategyWeights).where(StrategyWeights.id == weight_id))
+        weights = result.scalar_one_or_none()
+        
+        if not weights:
+            raise HTTPException(status_code=404, detail="Weights not found")
+        
+        weights.active = 1
+        await db.commit()
+        
+        logger.info(f"✅ Activated weights ID {weight_id}: {weights.name}")
+        
+        return {
+            'success': True,
+            'message': f'Activated {weights.name}',
+            'weight_id': weight_id
+        }
+    
+    except Exception as e:
+        logger.error(f"Error activating weights: {e}")
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+

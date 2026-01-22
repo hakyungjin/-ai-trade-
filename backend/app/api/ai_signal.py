@@ -1,13 +1,22 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import os
+import logging
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.ai_service import AIService
 from app.services.gemini_service import GeminiService
 from app.services.binance_service import BinanceService
+from app.services.weighted_strategy import WeightedStrategy
+from app.services.technical_indicators import TechnicalIndicators
+from app.services.vector_pattern_service import VectorPatternService
 from app.config import get_settings
+from app.database import get_db
+from app.models.vector_pattern import VectorPattern
+from datetime import datetime
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # 설정 로드
 settings = get_settings()
@@ -36,6 +45,31 @@ class PredictionResponse(BaseModel):
     analysis: str
 
 
+class WeightedSignalResponse(BaseModel):
+    signal: str  # "STRONG_BUY", "BUY", "NEUTRAL", "SELL", "STRONG_SELL"
+    score: float  # -1 ~ 1
+    confidence: float  # 0.0 ~ 1.0
+    indicators: Dict[str, Any]  # 각 지표별 점수
+    recommendation: str
+
+
+class CombinedPredictionResponse(BaseModel):
+    """AI 예측 + 가중치 전략 응답"""
+    symbol: str
+    current_price: float
+    timeframe: str
+    
+    # AI 예측
+    ai_prediction: PredictionResponse
+    
+    # 가중치 기반 전략
+    weighted_signal: WeightedSignalResponse
+    
+    # 최종 종합 신호
+    final_signal: str  # "BUY", "SELL", "HOLD"
+    final_confidence: float
+
+
 class PromptSettingRequest(BaseModel):
     prompt: str  # 사용자 프롬프트 (예: "스탑로스 3%, 익절 5% 설정해줘")
 
@@ -49,8 +83,11 @@ class TradingRule(BaseModel):
 
 
 @router.post("/predict", response_model=PredictionResponse)
-async def get_prediction(request: PredictionRequest):
-    """AI 예측 신호 조회 (Gemini 우선, fallback으로 기존 모델)"""
+async def get_prediction(
+    request: PredictionRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """AI 예측 신호 조회 (DB 캐시 활용 + Gemini 우선, fallback으로 기존 모델)"""
     try:
         config = get_settings()
         binance = BinanceService(
@@ -63,28 +100,47 @@ async def get_prediction(request: PredictionRequest):
         price_data = await binance.get_current_price(request.symbol)
         current_price = price_data.get("price", 0)
 
-        # 캔들 데이터 조회 (AI 분석용)
-        candles = await binance.get_klines(
+        # 통합 데이터 서비스로 캐시 + 증분 수집 활용
+        unified_service = UnifiedDataService(db, binance)
+        candles = await unified_service.get_klines_with_cache(
             symbol=request.symbol,
-            interval=request.timeframe,
+            timeframe=request.timeframe,
             limit=100
         )
 
+        prediction = None
+        
         # Gemini API 키가 있으면 Gemini 사용
         if config.gemini_api_key:
-            prediction = await gemini_service.analyze_chart(
-                symbol=request.symbol,
-                candles=candles,
-                current_price=current_price,
-                timeframe=request.timeframe
-            )
-        else:
-            # Gemini 없으면 기존 AI 서비스 사용
-            prediction = await ai_service.predict_signal(
-                symbol=request.symbol,
-                candles=candles,
-                current_price=current_price
-            )
+            try:
+                prediction = await gemini_service.analyze_chart(
+                    symbol=request.symbol,
+                    candles=candles,
+                    current_price=current_price,
+                    timeframe=request.timeframe
+                )
+            except Exception as gemini_error:
+                # Gemini 에러 (할당량 초과 등) - 로깅만 하고 fallback
+                print(f"⚠️  Gemini API error (fallback to local model): {gemini_error}")
+                prediction = None
+        
+        # Gemini 없거나 실패 시 기존 AI 서비스 사용
+        if prediction is None:
+            try:
+                prediction = await ai_service.predict_signal(
+                    symbol=request.symbol,
+                    candles=candles,
+                    current_price=current_price
+                )
+            except Exception as local_error:
+                print(f"⚠️  Local AI model error: {local_error}")
+                # Fallback: 중립 신호 반환
+                prediction = {
+                    "signal": "HOLD",
+                    "confidence": 0.5,
+                    "direction": "NEUTRAL",
+                    "analysis": "Unable to analyze - using default neutral signal"
+                }
 
         return PredictionResponse(
             symbol=request.symbol,
@@ -95,6 +151,7 @@ async def get_prediction(request: PredictionRequest):
             analysis=prediction["analysis"]
         )
     except Exception as e:
+        print(f"❌ Prediction error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -108,6 +165,245 @@ async def parse_trading_prompt(request: PromptSettingRequest):
         rule = await ai_service.parse_trading_prompt(request.prompt)
         return TradingRule(**rule)
     except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/combined-analysis", response_model=CombinedPredictionResponse)
+async def get_combined_analysis(
+    request: PredictionRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """🚀 AI 예측 + 가중치 기반 전략 통합 분석"""
+    try:
+        config = get_settings()
+        binance = BinanceService(
+            api_key=config.binance_api_key,
+            secret_key=config.binance_secret_key,
+            testnet=config.binance_testnet
+        )
+
+        # 현재가 조회
+        price_data = await binance.get_current_price(request.symbol)
+        current_price = price_data.get("price", 0)
+
+        # 데이터 수집 (Binance에서 직접)
+        try:
+            print(f"🔄 Fetching candles for {request.symbol} {request.timeframe}...")
+            candles = await binance.get_klines(
+                symbol=request.symbol,
+                interval=request.timeframe,
+                limit=100
+            )
+            print(f"✅ Fetched {len(candles)} candles from Binance")
+        except Exception as e:
+            print(f"❌ Error fetching klines: {e}")
+            import traceback
+            traceback.print_exc()
+            return CombinedAnalysisResponse(
+                symbol=request.symbol,
+                current_price=0,
+                timeframe=request.timeframe,
+                ai_prediction=AISignalResponse(
+                    signal="HOLD",
+                    confidence=0.0,
+                    direction="NEUTRAL",
+                    analysis="Failed to fetch candles"
+                ),
+                weighted_signal=WeightedSignalResponse(
+                    signal="neutral",
+                    score=0,
+                    confidence=0,
+                    indicators={},
+                    recommendation="캔들 데이터 조회 실패"
+                ),
+                final_signal="HOLD",
+                final_confidence=0.0
+            )
+
+        # ===== AI 예측 =====
+        ai_prediction = None
+        if config.gemini_api_key:
+            try:
+                ai_prediction = await gemini_service.analyze_chart(
+                    symbol=request.symbol,
+                    candles=candles,
+                    current_price=current_price,
+                    timeframe=request.timeframe
+                )
+            except Exception as e:
+                print(f"⚠️ Gemini API error: {e}")
+                ai_prediction = None
+        
+        if ai_prediction is None:
+            try:
+                ai_prediction = await ai_service.predict_signal(
+                    symbol=request.symbol,
+                    candles=candles,
+                    current_price=current_price
+                )
+            except Exception as e:
+                print(f"⚠️ Local AI model error: {e}")
+                ai_prediction = {
+                    "signal": "HOLD",
+                    "confidence": 0.5,
+                    "direction": "NEUTRAL",
+                    "analysis": "Unable to analyze - using default neutral signal"
+                }
+
+        # ===== 가중치 기반 전략 =====
+        try:
+            import pandas as pd
+            import logging
+            
+            logger = logging.getLogger(__name__)
+            logger.info(f"📊 Starting weighted analysis for {request.symbol}")
+            
+            # 캔들 데이터를 DataFrame으로 변환
+            df = pd.DataFrame(candles)
+            print(f"📋 Initial candle DataFrame columns: {df.columns.tolist()}")
+            print(f"📋 First row: {df.iloc[0].to_dict() if len(df) > 0 else 'EMPTY'}")
+            
+            # datetime 필드 제거 (OHLCV만 사용)
+            datetime_cols = ['open_time', 'close_time', 'timestamp']
+            df = df.drop(columns=[col for col in datetime_cols if col in df.columns])
+            
+            # 필요한 컬럼만 선택 및 숫자형 변환
+            required_cols = ['open', 'high', 'low', 'close', 'volume']
+            if not all(col in df.columns for col in required_cols):
+                logger.warning(f"⚠️ Missing required columns. Available: {df.columns.tolist()}")
+                raise ValueError(f"Required columns missing: {required_cols}")
+            
+            # 모든 OHLCV 컬럼을 float로 변환
+            for col in required_cols:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            
+            # NaN 제거
+            df = df.dropna(subset=required_cols)
+            
+            if len(df) < 5:
+                raise ValueError(f"Not enough candle data: {len(df)} < 5")
+            
+            logger.info(f"✅ Cleaned candle data shape: {df.shape}, columns: {df.columns.tolist()}")
+            
+            # 기술 지표 계산 (static 메서드)
+            tech_data = TechnicalIndicators.calculate_all_indicators(df)
+            
+            logger.info(f"Tech data shape after indicators: {tech_data.shape}")
+            
+            # 가중치 전략 적용
+            strategy = WeightedStrategy()
+            analysis_result = strategy.analyze(tech_data)
+            
+            logger.info(f"✅ Weighted analysis result: {analysis_result.get('signal')}")
+            logger.info(f"Analysis result keys: {analysis_result.keys()}")
+            
+            # 응답 객체 생성
+            recommendation_text = '기술적 분석 중립'
+            if isinstance(analysis_result.get('recommendation'), dict):
+                recommendation_text = analysis_result['recommendation'].get('description', '기술적 분석 중립')
+            
+            weighted_signal = WeightedSignalResponse(
+                signal=analysis_result.get('signal', 'neutral'),
+                score=float(analysis_result.get('combined_score', 0)),
+                confidence=float(analysis_result.get('confidence', 0)),
+                indicators=analysis_result.get('indicator_scores', {}),
+                recommendation=recommendation_text
+            )
+            logger.info(f"📈 Weighted signal response created: {weighted_signal.signal}")
+            
+        except Exception as e:
+            import traceback
+            logger.error(f"❌ Weighted strategy error: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            print(f"⚠️ Weighted strategy error: {e}")
+            print(traceback.format_exc())
+            
+            weighted_signal = WeightedSignalResponse(
+                signal="neutral",
+                score=0,
+                confidence=0.5,
+                indicators={},
+                recommendation="기술적 분석 불가"
+            )
+
+        # ===== 최종 종합 신호 =====
+        # AI 신호와 가중치 신호를 종합
+        ai_signal_value = 1 if ai_prediction["signal"] == "BUY" else -1 if ai_prediction["signal"] == "SELL" else 0
+        final_score = (ai_signal_value * ai_prediction["confidence"] + weighted_signal.score) / 2
+        
+        final_signal = "BUY" if final_score > 0.3 else "SELL" if final_score < -0.3 else "HOLD"
+        final_confidence = min(abs(final_score), 1.0)
+
+        logger.info(f"🎯 Final signal: {final_signal} (confidence: {final_confidence})")
+
+        # ===== VectorPattern 자동 저장 =====
+        try:
+            # 최신 캔들 데이터에서 지표 추출
+            latest_candle = candles[-1] if candles else {}
+            indicators_dict = {
+                'rsi_14': analysis_result.get('indicators', {}).get('rsi'),
+                'macd': analysis_result.get('indicators', {}).get('macd'),
+                'macd_signal': analysis_result.get('indicators', {}).get('macd_signal'),
+                'macd_histogram': analysis_result.get('indicators', {}).get('macd_histogram'),
+                'bb_upper': analysis_result.get('indicators', {}).get('bb_upper'),
+                'bb_middle': analysis_result.get('indicators', {}).get('bb_middle'),
+                'bb_lower': analysis_result.get('indicators', {}).get('bb_lower'),
+                'ema_12': analysis_result.get('indicators', {}).get('ema_12'),
+                'ema_26': analysis_result.get('indicators', {}).get('ema_26'),
+                'stoch_k': analysis_result.get('indicators', {}).get('stoch_k'),
+                'stoch_d': analysis_result.get('indicators', {}).get('stoch_d'),
+                'atr_14': analysis_result.get('indicators', {}).get('atr_14'),
+                'volume': latest_candle.get('volume', 0),
+                'close': current_price,
+            }
+            
+            # VectorPattern 레코드 생성 및 저장
+            vector_pattern = VectorPattern(
+                symbol=request.symbol,
+                timeframe=request.timeframe,
+                timestamp=datetime.now(),
+                vector_id=None,  # FAISS 인덱싱은 나중에
+                indicators=indicators_dict,
+                signal=final_signal,
+                confidence=final_confidence,
+                price_at_signal=current_price,
+                return_1h=None,      # 1시간 후 업데이트
+                return_4h=None,      # 4시간 후 업데이트
+                return_24h=None,     # 24시간 후 업데이트
+            )
+            
+            db.add(vector_pattern)
+            await db.commit()
+            
+            logger.info(f"💾 Saved VectorPattern: {request.symbol} {final_signal} @ {current_price}")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to save VectorPattern: {e}")
+            await db.rollback()
+            # 저장 실패해도 응답은 진행
+
+        return CombinedPredictionResponse(
+            symbol=request.symbol,
+            current_price=current_price,
+            timeframe=request.timeframe,
+            ai_prediction=PredictionResponse(
+                symbol=request.symbol,
+                signal=ai_prediction["signal"],
+                confidence=ai_prediction["confidence"],
+                predicted_direction=ai_prediction["direction"],
+                current_price=current_price,
+                analysis=ai_prediction["analysis"]
+            ),
+            weighted_signal=weighted_signal,
+            final_signal=final_signal,
+            final_confidence=final_confidence
+        )
+    except Exception as e:
+        import traceback
+        print(f"❌ Combined analysis error: {e}")
+        print(traceback.format_exc())
+        logger.error(f"❌ Combined analysis error: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=400, detail=str(e))
 
 

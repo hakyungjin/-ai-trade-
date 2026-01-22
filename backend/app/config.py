@@ -8,8 +8,9 @@ class Settings(BaseSettings):
     binance_secret_key: str = ""
     binance_testnet: bool = True
 
-    # Database
-    database_url: str = "sqlite+aiosqlite:///./trading.db"
+    # Database (MySQL)
+    database_url: str = "mysql+aiomysql://root:password@localhost:3306/crypto_trader"
+    sqlalchemy_url: str = "mysql+aiomysql://root:password@localhost:3306/crypto_trader"
 
     # Gemini AI
     gemini_api_key: str = ""

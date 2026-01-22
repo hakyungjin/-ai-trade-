@@ -3,6 +3,7 @@ from binance.enums import *
 from typing import Optional, List, Dict, Any
 import asyncio
 from functools import partial
+from datetime import datetime
 
 
 class BinanceService:
@@ -17,6 +18,9 @@ class BinanceService:
         if testnet:
             # 테스트넷 URL 설정
             self.client.API_URL = "https://testnet.binance.vision/api"
+
+        # 마켓 데이터용 클라이언트 (실제 바이낸스 API - 인증 불필요)
+        self.market_client = Client("", "", testnet=False)
 
     async def _run_sync(self, func, *args, **kwargs):
         """동기 함수를 비동기로 실행"""
@@ -151,19 +155,22 @@ class BinanceService:
         interval: str = "1h",
         limit: int = 100
     ) -> List[Dict[str, Any]]:
-        """캔들 데이터 조회"""
+        """캔들 데이터 조회 (실제 바이낸스 API 사용)"""
         interval_map = {
             "1m": KLINE_INTERVAL_1MINUTE,
             "5m": KLINE_INTERVAL_5MINUTE,
             "15m": KLINE_INTERVAL_15MINUTE,
+            "30m": KLINE_INTERVAL_30MINUTE,
             "1h": KLINE_INTERVAL_1HOUR,
             "4h": KLINE_INTERVAL_4HOUR,
             "1d": KLINE_INTERVAL_1DAY,
+            "1w": KLINE_INTERVAL_1WEEK,
         }
 
         kline_interval = interval_map.get(interval, KLINE_INTERVAL_1HOUR)
+        # 마켓 데이터는 실제 바이낸스 API 사용
         klines = await self._run_sync(
-            self.client.get_klines,
+            self.market_client.get_klines,
             symbol=symbol,
             interval=kline_interval,
             limit=limit
@@ -171,15 +178,16 @@ class BinanceService:
 
         return [
             {
-                "timestamp": k[0],
+                "timestamp": k[0],  # 밀리초 단위 타임스탬프
+                "open_time": datetime.fromtimestamp(k[0] / 1000).isoformat(),
                 "open": float(k[1]),
                 "high": float(k[2]),
                 "low": float(k[3]),
                 "close": float(k[4]),
                 "volume": float(k[5]),
-                "close_time": k[6],
+                "close_time": datetime.fromtimestamp(k[6] / 1000).isoformat(),
                 "quote_volume": float(k[7]),
-                "trades": k[8]
+                "trades_count": k[8]
             }
             for k in klines
         ]
@@ -223,3 +231,77 @@ class BinanceService:
             }
             for t in trades
         ]
+
+    async def get_ticker_24h(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        """24시간 티커 데이터 조회 (실제 바이낸스 API 사용)"""
+        if symbol:
+            ticker = await self._run_sync(self.market_client.get_ticker, symbol=symbol)
+            tickers = [ticker]
+        else:
+            tickers = await self._run_sync(self.market_client.get_ticker)
+
+        return [
+            {
+                "symbol": t["symbol"],
+                "price": float(t["lastPrice"]),
+                "priceChange": float(t["priceChange"]),
+                "priceChangePercent": float(t["priceChangePercent"]),
+                "highPrice": float(t["highPrice"]),
+                "lowPrice": float(t["lowPrice"]),
+                "volume": float(t["volume"]),
+                "quoteVolume": float(t["quoteVolume"]),
+                "openPrice": float(t["openPrice"]),
+                "prevClosePrice": float(t["prevClosePrice"]),
+                "bidPrice": float(t["bidPrice"]),
+                "askPrice": float(t["askPrice"]),
+                "weightedAvgPrice": float(t["weightedAvgPrice"]),
+                "openTime": t["openTime"],
+                "closeTime": t["closeTime"],
+                "count": t["count"]
+            }
+            for t in tickers
+        ]
+
+    async def get_top_gainers_losers(self, limit: int = 10) -> Dict[str, List[Dict[str, Any]]]:
+        """상승/하락 상위 코인 조회 (USDT 페어만)"""
+        all_tickers = await self.get_ticker_24h()
+
+        # USDT 페어만 필터링
+        usdt_tickers = [t for t in all_tickers if t["symbol"].endswith("USDT")]
+
+        # 거래량이 일정 이상인 것만 필터 (너무 작은 코인 제외)
+        filtered = [t for t in usdt_tickers if t["quoteVolume"] > 100000]
+
+        # 상승률 기준 정렬
+        sorted_by_change = sorted(filtered, key=lambda x: x["priceChangePercent"], reverse=True)
+
+        gainers = sorted_by_change[:limit]
+        losers = sorted_by_change[-limit:][::-1]  # 하락 상위는 역순
+
+        return {
+            "gainers": gainers,
+            "losers": losers,
+            "timestamp": asyncio.get_event_loop().time()
+        }
+
+    async def get_exchange_info(self) -> Dict[str, Any]:
+        """거래소 정보 조회 (실제 바이낸스 API 사용)"""
+        info = await self._run_sync(self.market_client.get_exchange_info)
+        return info
+
+    async def search_symbols(self, query: str) -> List[Dict[str, Any]]:
+        """심볼 검색"""
+        info = await self.get_exchange_info()
+        query_upper = query.upper()
+
+        symbols = []
+        for s in info["symbols"]:
+            if s["status"] == "TRADING" and query_upper in s["symbol"]:
+                symbols.append({
+                    "symbol": s["symbol"],
+                    "baseAsset": s["baseAsset"],
+                    "quoteAsset": s["quoteAsset"],
+                    "status": s["status"]
+                })
+
+        return symbols[:50]  # 최대 50개

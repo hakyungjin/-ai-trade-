@@ -1,25 +1,22 @@
 import { useEffect, useState } from 'react';
 import { useTradingStore } from '../../store/tradingStore';
-import { tradingApi } from '../../api/client';
+import { marketApi } from '../../api/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Slider } from '@/components/ui/slider';
 import { AlertCircle } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
 export function FuturesTrading() {
-  const { selectedSymbol, balances } = useTradingStore();
+  const { selectedSymbol } = useTradingStore();
   
-  const [orderType, setOrderType] = useState<'BUY' | 'SELL'>('BUY');
   const [positionMode, setPositionMode] = useState<'LONG' | 'SHORT'>('LONG');
-  const [leverage, setLeverage] = useState([5]); // 기본 5배
+  const [leverage, setLeverage] = useState([5]);
   const [quantity, setQuantity] = useState('');
-  const [price, setPrice] = useState('');
   const [stopLoss, setStopLoss] = useState('');
   const [takeProfit, setTakeProfit] = useState('');
   const [loading, setLoading] = useState(false);
@@ -29,8 +26,8 @@ export function FuturesTrading() {
   useEffect(() => {
     const fetchPrice = async () => {
       try {
-        const res = await tradingApi.getPrice(selectedSymbol);
-        setCurrentPrice(res.data.price);
+        const res = await marketApi.getTicker(selectedSymbol);
+        setCurrentPrice(res.data.lastPrice);
       } catch (error) {
         console.error('가격 조회 실패:', error);
       }
@@ -40,34 +37,11 @@ export function FuturesTrading() {
 
   const handleOrder = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
-    try {
-      const orderData = {
-        symbol: selectedSymbol,
-        side: positionMode === 'LONG' ? 'BUY' : 'SELL',
-        quantity: parseFloat(quantity),
-        order_type: 'MARKET',
-        leverage: leverage[0],
-        stop_loss: stopLoss ? parseFloat(stopLoss) : undefined,
-        take_profit: takeProfit ? parseFloat(takeProfit) : undefined,
-      };
-
-      // 실제로는 선물 전용 엔드포인트가 필요
-      await tradingApi.createOrder(orderData);
-      setMessage({ type: 'success', text: `${leverage[0]}배 선물 포지션이 생성되었습니다.` });
-      setQuantity('');
-      setStopLoss('');
-      setTakeProfit('');
-    } catch (error: any) {
-      setMessage({ type: 'error', text: error.response?.data?.detail || '포지션 생성 실패' });
-    } finally {
-      setLoading(false);
-    }
+    setMessage({ type: 'success', text: '선물 거래 기능은 준비 중입니다. (API 미구현)' });
+    setQuantity('');
+    setStopLoss('');
+    setTakeProfit('');
   };
-
-  const maxLoss = (parseFloat(quantity) * currentPrice * leverage[0] * 0.05) || 0;
-  const maxGain = (parseFloat(quantity) * currentPrice * leverage[0] * 0.1) || 0;
-  const usdtBalance = balances.find((b) => b.asset === 'USDT')?.total || 0;
 
   return (
     <div className="space-y-4">

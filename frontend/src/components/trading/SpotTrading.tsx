@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTradingStore } from '../../store/tradingStore';
-import { tradingApi } from '../../api/client';
+import { marketApi } from '../../api/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -8,12 +8,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { AlertCircle, CheckCircle2 } from 'lucide-react';
+import { AlertCircle } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
 export function SpotTrading() {
-  const { selectedSymbol, balances } = useTradingStore();
-  
+  const { selectedSymbol } = useTradingStore();
+
   const [orderType, setOrderType] = useState<'BUY' | 'SELL'>('BUY');
   const [priceType, setPriceType] = useState<'MARKET' | 'LIMIT'>('MARKET');
   const [quantity, setQuantity] = useState('');
@@ -27,8 +27,10 @@ export function SpotTrading() {
   useEffect(() => {
     const fetchPrice = async () => {
       try {
-        const res = await tradingApi.getPrice(selectedSymbol);
-        setCurrentPrice(res.data.price);
+        const res = await marketApi.getTicker(selectedSymbol);
+        if (res.data.success) {
+          setCurrentPrice(res.data.data.price);
+        }
       } catch (error) {
         console.error('가격 조회 실패:', error);
       }
@@ -40,18 +42,8 @@ export function SpotTrading() {
     e.preventDefault();
     setLoading(true);
     try {
-      const orderData = {
-        symbol: selectedSymbol,
-        side: orderType,
-        quantity: parseFloat(quantity),
-        order_type: priceType,
-        price: priceType === 'LIMIT' ? parseFloat(price) : undefined,
-        stop_loss: stopLoss ? parseFloat(stopLoss) : undefined,
-        take_profit: takeProfit ? parseFloat(takeProfit) : undefined,
-      };
-
-      await tradingApi.createOrder(orderData);
-      setMessage({ type: 'success', text: '주문이 생성되었습니다.' });
+      // TODO: 실제 주문 API 연동 시 활성화
+      setMessage({ type: 'success', text: '주문 기능은 API 키 설정 후 사용 가능합니다.' });
       setQuantity('');
       setPrice('');
       setStopLoss('');
@@ -62,8 +54,6 @@ export function SpotTrading() {
       setLoading(false);
     }
   };
-
-  const usdtBalance = balances.find((b) => b.asset === 'USDT')?.total || 0;
 
   return (
     <div className="space-y-4">
@@ -98,12 +88,6 @@ export function SpotTrading() {
           <div className="bg-muted p-3 rounded-lg">
             <div className="text-sm text-muted-foreground mb-1">현재가</div>
             <div className="text-2xl font-bold">${currentPrice.toLocaleString()}</div>
-          </div>
-
-          {/* Balance */}
-          <div className="bg-muted p-3 rounded-lg">
-            <div className="text-sm text-muted-foreground mb-1">USDT 잔고</div>
-            <div className="text-lg font-semibold">${usdtBalance.toLocaleString()}</div>
           </div>
 
           <form onSubmit={handleOrder} className="space-y-4">

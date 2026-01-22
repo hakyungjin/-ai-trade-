@@ -1,59 +1,97 @@
 import { useEffect, useState } from 'react';
 import { useTradingStore } from '../store/tradingStore';
-import { tradingApi, aiApi } from '../api/client';
-import { TrendingUp, TrendingDown, Minus, RefreshCw, Wallet, BarChart3, PiggyBank } from 'lucide-react';
+import { aiApi, marketApi } from '../api/client';
+import { TrendingUp, TrendingDown, Minus, RefreshCw, BarChart3 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
 import { SpotTrading } from './trading/SpotTrading';
 import { FuturesTrading } from './trading/FuturesTrading';
+import { PriceChart } from './market';
 
 export function Dashboard() {
   const {
-    balances,
-    positions,
     currentSignal,
     selectedSymbol,
-    setBalances,
-    setPositions,
     setCurrentSignal,
     setSelectedSymbol,
   } = useTradingStore();
 
   const [currentPrice, setCurrentPrice] = useState<number>(0);
+  const [priceChange, setPriceChange] = useState<number>(0);
   const [loading, setLoading] = useState(false);
   const [tradingMode, setTradingMode] = useState<'spot' | 'futures'>('spot');
+  const [weightedAnalysis, setWeightedAnalysis] = useState<any>(null);
 
   const symbols = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT'];
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [balanceRes, positionRes, priceRes, signalRes] = await Promise.all([
-        tradingApi.getBalance(),
-        tradingApi.getPositions(),
-        tradingApi.getPrice(selectedSymbol),
+      const [tickerRes, signalRes, weightedRes] = await Promise.all([
+        marketApi.getTicker(selectedSymbol),
         aiApi.predict(selectedSymbol),
+        aiApi.combinedAnalysis(selectedSymbol),
       ]);
 
-      setBalances(balanceRes.data);
-      setPositions(positionRes.data);
-      setCurrentPrice(priceRes.data.price);
-      setCurrentSignal(signalRes.data);
+      console.log('Ticker Response:', tickerRes);
+      console.log('Signal Response:', signalRes);
+      console.log('Weighted Analysis:', weightedRes);
+
+      // 마켓 데이터 처리
+      if (tickerRes?.data) {
+        const tickerData = tickerRes.data.data || tickerRes.data;
+        console.log('Ticker Data:', tickerData);
+        if (tickerData?.price !== undefined) {
+          setCurrentPrice(tickerData.price);
+          setPriceChange(tickerData.priceChangePercent || 0);
+        } else {
+          console.warn('Price not found in ticker data');
+        }
+      }
+      
+      // AI 신호 데이터 처리
+      if (signalRes?.data) {
+        console.log('Signal Data:', signalRes.data);
+        setCurrentSignal(signalRes.data);
+      }
+
+      // 가중치 분석 데이터 처리
+      if (weightedRes?.data) {
+        console.log('Weighted Analysis Data:', weightedRes.data);
+        setWeightedAnalysis(weightedRes.data);
+      }
     } catch (error) {
       console.error('데이터 조회 실패:', error);
+      if (error instanceof Error) {
+        console.error('Error message:', error.message);
+      }
+      // 기본값 설정
+      setCurrentPrice(0);
+      setPriceChange(0);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
+    console.log('Fetching data for symbol:', selectedSymbol);
+    // 심볼 변경 시 이전 상태 초기화
+    setCurrentPrice(0);
+    setPriceChange(0);
+    
+    // 즉시 데이터 조회
     fetchData();
-    const interval = setInterval(fetchData, 30000);
+    
+    // 10초마다 업데이트 (더 자주)
+    const interval = setInterval(() => {
+      console.log('Auto-fetching data for:', selectedSymbol);
+      fetchData();
+    }, 10000);
+    
     return () => clearInterval(interval);
   }, [selectedSymbol]);
 
@@ -68,9 +106,6 @@ export function Dashboard() {
         return <Minus className="w-6 h-6 text-muted-foreground" />;
     }
   };
-
-  const totalValue = positions.reduce((sum, p) => sum + p.value_usdt, 0);
-  const usdtBalance = balances.find((b) => b.asset === 'USDT')?.total || 0;
 
   return (
     <div className="p-4 md:p-6 space-y-6">
@@ -117,65 +152,135 @@ export function Dashboard() {
         </TabsList>
       </Tabs>
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <BarChart3 className="w-4 h-4" />
-              현재가
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-xl md:text-2xl font-bold">
+      {/* Stats Card - 현재가만 표시 */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+            <BarChart3 className="w-4 h-4" />
+            현재가
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-4">
+            <div className="text-2xl md:text-3xl font-bold">
               ${currentPrice.toLocaleString()}
             </div>
-            <Badge variant="outline" className="mt-1">{selectedSymbol}</Badge>
-          </CardContent>
-        </Card>
+            <Badge
+              variant={priceChange >= 0 ? 'default' : 'destructive'}
+              className="text-sm"
+            >
+              {priceChange >= 0 ? '+' : ''}{priceChange.toFixed(2)}%
+            </Badge>
+          </div>
+          <Badge variant="outline" className="mt-2">{selectedSymbol}</Badge>
+        </CardContent>
+      </Card>
 
-        <Card>
+      {/* 가중치 기반 신호 카드 */}
+      {weightedAnalysis && (
+        <Card className="border-2">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <Wallet className="w-4 h-4" />
-              USDT 잔고
+              📊 가중치 기반 분석 (AI + 기술적 지표)
             </CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="text-xl md:text-2xl font-bold">
-              ${usdtBalance.toLocaleString()}
+          <CardContent className="space-y-4">
+            {/* 최종 신호 */}
+            <div className="flex items-center justify-between">
+              <span className="font-semibold">최종 신호</span>
+              <Badge
+                variant={
+                  weightedAnalysis.final_signal === 'BUY'
+                    ? 'default'
+                    : weightedAnalysis.final_signal === 'SELL'
+                    ? 'destructive'
+                    : 'secondary'
+                }
+                className="text-base py-1 px-3"
+              >
+                {weightedAnalysis.final_signal}
+              </Badge>
             </div>
-          </CardContent>
-        </Card>
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <TrendingUp className="w-4 h-4" />
-              포지션 가치
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-xl md:text-2xl font-bold">
-              ${totalValue.toLocaleString()}
+            {/* 신뢰도 */}
+            <div>
+              <div className="flex justify-between mb-1">
+                <span className="text-sm">신뢰도</span>
+                <span className="text-sm font-semibold">
+                  {(weightedAnalysis.final_confidence * 100).toFixed(1)}%
+                </span>
+              </div>
+              <Progress
+                value={weightedAnalysis.final_confidence * 100}
+                className="h-2"
+              />
             </div>
-          </CardContent>
-        </Card>
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <PiggyBank className="w-4 h-4" />
-              총 자산
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-xl md:text-2xl font-bold text-primary">
-              ${(usdtBalance + totalValue).toLocaleString()}
-            </div>
+            {/* AI 예측 */}
+            {weightedAnalysis.ai_prediction && (
+              <div className="pt-2 border-t">
+                <div className="text-xs font-semibold text-muted-foreground mb-2">
+                  AI 예측
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">신호:</span>
+                    <Badge variant="outline" className="ml-1">
+                      {weightedAnalysis.ai_prediction.signal}
+                    </Badge>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">신뢰도:</span>
+                    <span className="ml-1 font-semibold">
+                      {(weightedAnalysis.ai_prediction.confidence * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 기술적 지표 신호 */}
+            {weightedAnalysis.weighted_signal && (
+              <div className="pt-2 border-t">
+                <div className="text-xs font-semibold text-muted-foreground mb-2">
+                  기술적 지표
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">신호:</span>
+                    <Badge variant="outline" className="ml-1">
+                      {weightedAnalysis.weighted_signal.signal}
+                    </Badge>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">점수:</span>
+                    <span
+                      className={cn(
+                        'ml-1 font-semibold',
+                        weightedAnalysis.weighted_signal.score > 0
+                          ? 'text-green-600'
+                          : weightedAnalysis.weighted_signal.score < 0
+                          ? 'text-red-600'
+                          : 'text-gray-600'
+                      )}
+                    >
+                      {weightedAnalysis.weighted_signal.score.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+                {weightedAnalysis.weighted_signal.recommendation && (
+                  <p className="text-xs text-muted-foreground mt-2 italic">
+                    💡 {weightedAnalysis.weighted_signal.recommendation}
+                  </p>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
-      </div>
+      )}
+
+      {/* 실시간 차트 */}
+      <PriceChart symbol={selectedSymbol} />
 
       {/* AI Signal Card */}
       <Card className={cn(
@@ -232,47 +337,6 @@ export function Dashboard() {
           {currentSignal?.analysis && (
             <div className="mt-4 p-3 bg-background/50 rounded-lg border">
               <div className="text-sm text-muted-foreground">{currentSignal.analysis}</div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Positions */}
-      <Card>
-        <CardHeader>
-          <CardTitle>보유 포지션</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {positions.length === 0 ? (
-            <div className="text-muted-foreground text-center py-8">
-              보유 포지션이 없습니다
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>심볼</TableHead>
-                    <TableHead>수량</TableHead>
-                    <TableHead>현재가</TableHead>
-                    <TableHead className="text-right">가치 (USDT)</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {positions.map((position) => (
-                    <TableRow key={position.symbol}>
-                      <TableCell className="font-medium">
-                        <Badge variant="outline">{position.symbol}</Badge>
-                      </TableCell>
-                      <TableCell>{position.quantity.toFixed(6)}</TableCell>
-                      <TableCell>${position.current_price.toLocaleString()}</TableCell>
-                      <TableCell className="text-right font-medium">
-                        ${position.value_usdt.toLocaleString()}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
             </div>
           )}
         </CardContent>
