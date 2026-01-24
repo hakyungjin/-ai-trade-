@@ -1,6 +1,101 @@
 # Crypto AI Trader - AI Model Training Pipeline
 
-암호화폐 가격 예측을 위한 LSTM/Transformer 기반 AI 모델 학습 파이프라인입니다.
+암호화폐 가격 예측을 위한 XGBoost 기반 AI 모델 학습 파이프라인입니다.
+
+---
+
+## 🚀 빠른 시작 (Quick Start)
+
+### ai-model 폴더에서 실행 (권장)
+
+```powershell
+# 1. ai-model 폴더로 이동 & venv 활성화
+cd ai-model
+.\.venv\Scripts\Activate.ps1
+
+# 2. (최초 1회) 패키지 설치
+pip install -r requirements.txt
+
+# 3. 데이터 수집 (모니터링 코인 전체 - 현물/선물 자동)
+python scripts/collect_monitored_coins.py --timeframe 5m --target 10000
+
+# 4. 데이터 수집 (단일 코인 대량)
+python scripts/collect_large_dataset.py --symbol BTCUSDT --timeframe 5m --target 50000
+
+# 5. 학습 데이터 준비 (3클래스: BUY/HOLD/SELL)
+python scripts/prepare_training_data.py --symbol BTCUSDT --timeframe 5m --threshold 0.01 --future 6 --limit 50000 --classes 3
+
+# 6. 모델 학습
+python scripts/train_model.py --input data/btcusdt_5m_training.csv --model-name xgboost_btcusdt_5m
+```
+
+### 선물 코인 예시 (BEATUSDT)
+
+```powershell
+# 1. 선물 데이터 수집
+python scripts/collect_monitored_coins.py --symbols BEATUSDT --market futures --timeframe 5m --target 50000
+
+# 2. 학습 데이터 준비 (3클래스)
+python scripts/prepare_training_data.py --symbol BEATUSDT --timeframe 5m --threshold 0.01 --future 6 --limit 50000 --classes 3
+
+# 3. 모델 학습
+python scripts/train_model.py --input data/beatusdt_5m_training.csv --model-name xgboost_beatusdt_5m
+```
+
+### backend 폴더에서 서버 실행
+
+```powershell
+cd backend
+.\.venv\Scripts\Activate.ps1
+uvicorn app.main:app --reload --port 8000
+```
+
+---
+
+## 📋 스크립트 설명
+
+| 스크립트 | 용도 |
+|---------|------|
+| `collect_large_dataset.py` | 단일 코인 대량 데이터 수집 (Binance API) |
+| `collect_monitored_coins.py` | 모니터링 중인 코인 전체 데이터 수집 |
+| `prepare_training_data.py` | 기술적 지표 계산 + 라벨링 |
+| `train_model.py` | XGBoost 모델 학습 |
+
+## 📊 파라미터 설명
+
+### collect_monitored_coins.py / collect_large_dataset.py
+| 파라미터 | 설명 | 예시 |
+|----------|------|------|
+| `--symbol` / `--symbols` | 코인 심볼 | `BTCUSDT`, `ETHUSDT` |
+| `--timeframe` | 캔들 봉 간격 | `1m`, `5m`, `15m`, `1h` |
+| `--target` | 수집할 캔들 개수 | `10000`, `50000` |
+| `--market` | 마켓 타입 (현물/선물) | `spot`, `futures` |
+
+### prepare_training_data.py
+| 파라미터 | 설명 | 예시 |
+|----------|------|------|
+| `--symbol` | 코인 심볼 | `BTCUSDT` |
+| `--timeframe` | 캔들 봉 간격 | `5m` |
+| `--threshold` | BUY/SELL 분류 기준 (변동률) | `0.02` = 2% |
+| `--future` | 몇 개 봉 뒤 가격으로 라벨 | `6` = 30분 후 (5m 봉 기준) |
+| `--limit` | 가져올 캔들 개수 | `50000` |
+| `--classes` | 클래스 수 (3 또는 5) | `3` = BUY/HOLD/SELL (권장) |
+
+### train_model.py
+| 파라미터 | 설명 | 예시 |
+|----------|------|------|
+| `--input` | 학습 데이터 CSV 경로 **(필수)** | `data/btcusdt_5m_training.csv` |
+| `--model-name` | 저장할 모델 이름 | `xgboost_btcusdt_5m` |
+| `--output-dir` | 모델 저장 디렉토리 | `models/` |
+| `--test-size` | 테스트셋 비율 | `0.2` (20%) |
+
+## 📂 결과물 위치
+
+| 항목 | 경로 |
+|------|------|
+| 가공된 데이터 | `ai-model/data/{symbol}_{timeframe}_training.csv` |
+| 학습된 모델 | `ai-model/models/{model-name}.json` |
+| 스케일러 | `ai-model/models/scaler_{model-name}.pkl` |
 
 ## 차트 데이터 학습 흐름
 

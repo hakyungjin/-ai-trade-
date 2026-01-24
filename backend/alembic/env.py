@@ -27,7 +27,7 @@ if config.config_file_name is not None:
 # add your model's MetaData object here
 # for 'autogenerate' support
 from app.database import Base
-from app.models import trade, market_data  # noqa: F401
+from app.models import trade, market_data, coin  # noqa: F401
 target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,
@@ -48,7 +48,8 @@ def run_migrations_offline() -> None:
     script output.
 
     """
-    url = config.get_main_option("sqlalchemy.url")
+    # Use database_url from environment or default (not alembic.ini)
+    url = database_url
     context.configure(
         url=url,
         target_metadata=target_metadata,

@@ -31,24 +31,11 @@ export const tradingApi = {
 
 // AI API
 export const aiApi = {
-  // TODO: Gemini API 무료 티어 할당량 초과로 인해 일시 비활성화
-  // predict: (symbol: string, timeframe = '1h') =>
-  //   apiClient.post('/ai/predict', { symbol, timeframe }),
-  predict: async (symbol: string, timeframe = '1h') => {
-    // 일시 비활성화 - 더미 응답 반환 (axios 래핑 고려)
-    return Promise.resolve({
-      data: {
-        symbol,
-        signal: 'HOLD',
-        confidence: 0,
-        predicted_direction: 'NEUTRAL',
-        current_price: 0,
-        analysis: 'AI 예측이 일시적으로 비활성화되었습니다. (Gemini API 할당량 초과)',
-      },
-    });
-  },
-  // 가중치 기반 통합 분석 (AI + 기술적 지표)
-  combinedAnalysis: (symbol: string, timeframe = '1h') =>
+  // AI 예측 - 버튼 클릭 시에만 호출 (5m: 학습된 모델과 일치)
+  predict: (symbol: string, timeframe = '5m') =>
+    apiClient.post('/ai/predict', { symbol, timeframe }),
+  // 가중치 기반 통합 분석 (AI + 기술적 지표) - 버튼 클릭 시에만 호출
+  combinedAnalysis: (symbol: string, timeframe = '5m') =>
     apiClient.post('/ai/combined-analysis', { symbol, timeframe }),
   parsePrompt: (prompt: string) =>
     apiClient.post('/ai/parse-prompt', { prompt }),

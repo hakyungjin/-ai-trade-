@@ -166,3 +166,19 @@ body {
     @apply bg-background text-foreground;
   }
 }
+
+/* 스크롤바 스타일 */
+main {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+main::-webkit-scrollbar {
+  width: 6px;
+}
+main::-webkit-scrollbar-track {
+  background: transparent;
+}
+main::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  border-radius: 3px;
+}

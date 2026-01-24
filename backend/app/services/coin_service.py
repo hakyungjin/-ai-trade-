@@ -25,6 +25,7 @@ class CoinService:
         base_asset: str,
         quote_asset: str,
         is_monitoring: bool = False,
+        market_type: str = 'spot',
         **kwargs
     ) -> Coin:
         """
@@ -36,19 +37,25 @@ class CoinService:
             base_asset: 기초 자산 (BTC)
             quote_asset: 인용 자산 (USDT)
             is_monitoring: 모니터링 여부
+            market_type: 시장 유형 ('spot' 또는 'futures')
             **kwargs: full_name, description 등
         
         Returns:
             생성된 Coin 객체
         """
         try:
-            # 기존 코인 확인
-            stmt = select(Coin).where(Coin.symbol == symbol)
+            # 기존 코인 확인 (심볼 + 마켓 타입으로 확인)
+            stmt = select(Coin).where(
+                and_(
+                    Coin.symbol == symbol,
+                    Coin.market_type == market_type
+                )
+            )
             result = await db_session.execute(stmt)
             existing = result.scalar_one_or_none()
             
             if existing:
-                logger.info(f"✅ Coin {symbol} already exists")
+                logger.info(f"✅ Coin {symbol} ({market_type}) already exists")
                 return existing
             
             # 새 코인 생성
@@ -57,10 +64,11 @@ class CoinService:
                 base_asset=base_asset,
                 quote_asset=quote_asset,
                 is_monitoring=is_monitoring,
+                market_type=market_type,
                 **kwargs
             )
             db_session.add(coin)
-            await db_session.flush()
+            await db_session.flush()  # ID를 얻기 위해 flush
             
             # 통계 및 설정 생성
             stats = CoinStatistics(coin_id=coin.id)
@@ -68,42 +76,69 @@ class CoinService:
             db_session.add(stats)
             db_session.add(config)
             
-            await db_session.commit()
-            logger.info(f"✅ Added coin {symbol}")
+            # flush만 하고 commit은 get_db()에서 자동으로 처리
+            # 이렇게 하면 FastAPI의 표준 패턴을 따름
+            await db_session.flush()  # 모든 변경사항을 DB에 반영 (아직 commit은 안됨)
+            
+            logger.info(f"✅ Added coin {symbol} ({market_type}) (ID: {coin.id}) - ready for commit by get_db()")
             return coin
             
         except Exception as e:
-            await db_session.rollback()
-            logger.error(f"❌ Error adding coin: {e}")
+            # rollback은 get_db()에서 자동으로 처리됨
+            logger.error(f"❌ Error adding coin {symbol}: {e}")
+            import traceback
+            traceback.print_exc()
             raise
     
     @staticmethod
     async def add_monitoring_coin(
         db_session: AsyncSession,
         symbol: str,
-        timeframes: List[str] = None
+        timeframes: List[str] = None,
+        market_type: str = 'spot'
     ) -> Coin:
-        """모니터링할 코인 추가"""
+        """
+        모니터링할 코인 추가 및 자동 데이터 수집 시작
+        
+        Args:
+            db_session: DB 세션
+            symbol: 심볼 (BTCUSDT)
+            timeframes: 모니터링할 타임프레임 목록
+            market_type: 시장 유형 ('spot' 또는 'futures')
+        """
+        import asyncio
+        from app.services.incremental_collector import IncrementalDataCollector
+        
         if timeframes is None:
             timeframes = ["1h"]
         
         # 바이낸스에서 코인 정보 조회
         from app.services.binance_service import BinanceService
+        from app.services.binance_futures_service import BinanceFuturesService, get_futures_service
         from app.config import get_settings
         
         config = get_settings()
-        binance = BinanceService(config.binance_api_key, config.binance_secret_key)
-        
-        # 심볼 검색
-        info = await binance.get_exchange_info()
         coin_info = None
-        for s in info['symbols']:
-            if s['symbol'] == symbol:
-                coin_info = s
-                break
+        
+        if market_type == 'futures':
+            # 선물 시장에서 심볼 검색
+            futures_service = get_futures_service()
+            info = await futures_service.get_futures_exchange_info()
+            for s in info.get('symbols', []):
+                if s['symbol'] == symbol:
+                    coin_info = s
+                    break
+        else:
+            # 현물 시장에서 심볼 검색
+            binance = BinanceService(config.binance_api_key, config.binance_secret_key)
+            info = await binance.get_exchange_info()
+            for s in info['symbols']:
+                if s['symbol'] == symbol:
+                    coin_info = s
+                    break
         
         if not coin_info:
-            raise ValueError(f"Symbol {symbol} not found")
+            raise ValueError(f"Symbol {symbol} not found in {market_type} market")
         
         # 코인 추가
         coin = await CoinService.add_coin(
@@ -112,28 +147,142 @@ class CoinService:
             base_asset=coin_info['baseAsset'],
             quote_asset=coin_info['quoteAsset'],
             is_monitoring=True,
+            market_type=market_type,
             monitoring_timeframes=timeframes
         )
+        
+        # 백그라운드에서 데이터 수집 시작 (현물/선물 모두 지원)
+        async def start_data_collection():
+            """백그라운드에서 데이터 수집 시작"""
+            try:
+                # 새로운 DB 세션 생성 (백그라운드 작업용)
+                from app.database import AsyncSessionLocal
+                async with AsyncSessionLocal() as bg_db:
+                    
+                    logger.info(f"🚀 Starting data collection for {symbol} ({market_type}) with timeframes: {timeframes}")
+                    
+                    if market_type == 'futures':
+                        # 선물 데이터 수집
+                        from app.services.binance_futures_service import BinanceFuturesService
+                        futures_service = BinanceFuturesService(config.binance_api_key, config.binance_secret_key)
+                        
+                        for timeframe in timeframes:
+                            try:
+                                klines = await futures_service.get_futures_klines(
+                                    symbol=symbol,
+                                    interval=timeframe,
+                                    limit=500
+                                )
+                                
+                                if klines:
+                                    from app.services.market_data_service import MarketDataService
+                                    market_service = MarketDataService(bg_db)
+                                    saved_count = await market_service.save_candles(
+                                        symbol=symbol,
+                                        timeframe=timeframe,
+                                        candles=klines
+                                    )
+                                    
+                                    logger.info(f"✅ [Futures] Collected {saved_count} candles for {symbol} ({timeframe})")
+                                    
+                                    # 코인 캔들 개수 업데이트
+                                    await CoinService.update_coin_candle_count(
+                                        bg_db,
+                                        coin.id,
+                                        (coin.candle_count or 0) + saved_count
+                                    )
+                                else:
+                                    logger.warning(f"⚠️ No futures data for {symbol} ({timeframe})")
+                            except Exception as e:
+                                logger.error(f"❌ Error collecting futures data for {symbol} ({timeframe}): {e}")
+                    else:
+                        # 현물 데이터 수집
+                        binance = BinanceService(config.binance_api_key, config.binance_secret_key)
+                        collector = IncrementalDataCollector(bg_db, binance)
+                        
+                        for timeframe in timeframes:
+                            try:
+                                success, saved_count = await collector.collect_incremental_data(
+                                    symbol=symbol,
+                                    timeframe=timeframe,
+                                    force_full=False  # 증분 수집
+                                )
+                                if success:
+                                    logger.info(f"✅ [Spot] Collected {saved_count} candles for {symbol} ({timeframe})")
+                                    
+                                    # 코인 캔들 개수 업데이트
+                                    await CoinService.update_coin_candle_count(
+                                        bg_db,
+                                        coin.id,
+                                        (coin.candle_count or 0) + saved_count
+                                    )
+                                else:
+                                    logger.warning(f"⚠️ Failed to collect data for {symbol} ({timeframe})")
+                            except Exception as e:
+                                logger.error(f"❌ Error collecting data for {symbol} ({timeframe}): {e}")
+                    
+                    logger.info(f"✅ Data collection completed for {symbol}")
+            except Exception as e:
+                logger.error(f"❌ Error in background data collection for {symbol}: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # 백그라운드 태스크로 실행 (응답을 빠르게 반환)
+        asyncio.create_task(start_data_collection())
+        
+        logger.info(f"✅ Coin {symbol} ({market_type}) added, data collection started in background")
         
         return coin
     
     @staticmethod
-    async def get_monitoring_coins(db_session: AsyncSession) -> List[Coin]:
-        """모니터링 중인 모든 코인 조회"""
-        stmt = select(Coin).where(
-            and_(
-                Coin.is_active == True,
-                Coin.is_monitoring == True
-            )
-        ).order_by(Coin.priority.desc())
+    async def get_monitoring_coins(
+        db_session: AsyncSession,
+        market_type: Optional[str] = None
+    ) -> List[Coin]:
+        """
+        모니터링 중인 모든 코인 조회
+        
+        Args:
+            db_session: DB 세션
+            market_type: 시장 유형 필터 ('spot', 'futures' 또는 None=전체)
+        """
+        conditions = [
+            Coin.is_active == True,
+            Coin.is_monitoring == True
+        ]
+        
+        if market_type:
+            conditions.append(Coin.market_type == market_type)
+        
+        stmt = select(Coin).where(and_(*conditions)).order_by(Coin.priority.desc())
         
         result = await db_session.execute(stmt)
         return result.scalars().all()
     
     @staticmethod
-    async def get_coin_by_symbol(db_session: AsyncSession, symbol: str) -> Optional[Coin]:
-        """심볼로 코인 조회"""
-        stmt = select(Coin).where(Coin.symbol == symbol)
+    async def get_coin_by_symbol(
+        db_session: AsyncSession,
+        symbol: str,
+        market_type: Optional[str] = None
+    ) -> Optional[Coin]:
+        """
+        심볼로 코인 조회
+        
+        Args:
+            db_session: DB 세션
+            symbol: 심볼 (BTCUSDT)
+            market_type: 시장 유형 ('spot' 또는 'futures'), None이면 심볼만으로 검색
+        """
+        if market_type:
+            stmt = select(Coin).where(
+                and_(
+                    Coin.symbol == symbol,
+                    Coin.market_type == market_type
+                )
+            )
+        else:
+            stmt = select(Coin).where(Coin.symbol == symbol)
+        
         result = await db_session.execute(stmt)
         return result.scalar_one_or_none()
     

@@ -16,6 +16,8 @@ from app.database import get_db
 from app.services.binance_service import BinanceService
 from app.services.incremental_collector import IncrementalDataCollector
 from app.services.batch_candle_collector import BatchCandleCollector
+from app.services.smart_candle_scheduler import get_scheduler
+from app.services.unified_data_service import UnifiedDataService
 from app.config import get_settings
 
 settings = get_settings()
@@ -391,6 +393,168 @@ async def collect_daily_snapshot(
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Snapshot collection error: {str(e)}")
+
+
+# ===== 스마트 스케줄러 API =====
+
+@router.get("/scheduler/status")
+async def get_scheduler_status():
+    """
+    스마트 캔들 스케줄러 상태 조회
+    
+    Response:
+    {
+        "is_running": true,
+        "active_timeframes": ["1h", "4h"],
+        "last_collection": {
+            "1h": "2026-01-24T10:00:00",
+            "4h": "2026-01-24T08:00:00"
+        }
+    }
+    """
+    scheduler = get_scheduler()
+    
+    if scheduler is None:
+        return {
+            "success": False,
+            "error": "Scheduler not initialized",
+            "is_running": False,
+            "active_timeframes": []
+        }
+    
+    status = scheduler.get_status()
+    return {
+        "success": True,
+        **status
+    }
+
+
+@router.post("/scheduler/add-timeframe/{timeframe}")
+async def add_scheduler_timeframe(timeframe: str):
+    """
+    스케줄러에 새 타임프레임 추가
+    
+    Path Parameters:
+    - timeframe: 추가할 타임프레임 (1m, 5m, 15m, 1h, 4h, 1d)
+    
+    Example:
+    - POST /api/v1/data/scheduler/add-timeframe/5m
+    """
+    scheduler = get_scheduler()
+    
+    if scheduler is None:
+        raise HTTPException(status_code=500, detail="Scheduler not initialized")
+    
+    await scheduler.add_timeframe(timeframe)
+    
+    return {
+        "success": True,
+        "message": f"Added timeframe {timeframe} to scheduler",
+        "active_timeframes": list(scheduler._tasks.keys())
+    }
+
+
+@router.delete("/scheduler/remove-timeframe/{timeframe}")
+async def remove_scheduler_timeframe(timeframe: str):
+    """
+    스케줄러에서 타임프레임 제거
+    
+    Path Parameters:
+    - timeframe: 제거할 타임프레임
+    
+    Example:
+    - DELETE /api/v1/data/scheduler/remove-timeframe/5m
+    """
+    scheduler = get_scheduler()
+    
+    if scheduler is None:
+        raise HTTPException(status_code=500, detail="Scheduler not initialized")
+    
+    await scheduler.remove_timeframe(timeframe)
+    
+    return {
+        "success": True,
+        "message": f"Removed timeframe {timeframe} from scheduler",
+        "active_timeframes": list(scheduler._tasks.keys())
+    }
+
+
+@router.get("/freshness/{symbol}")
+async def get_data_freshness(
+    symbol: str,
+    timeframe: str = "1h",
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    데이터 신선도 확인 (DB 데이터가 얼마나 최신인지)
+    
+    Response:
+    {
+        "symbol": "BTCUSDT",
+        "timeframe": "1h",
+        "total_candles": 500,
+        "latest_candle_time": "2026-01-24T10:00:00",
+        "age_minutes": 15,
+        "is_fresh": true
+    }
+    
+    is_fresh가 true면 분석에 충분히 최신 데이터임
+    """
+    try:
+        unified_service = UnifiedDataService(db, binance_service)
+        freshness = await unified_service.get_data_freshness(symbol, timeframe)
+        
+        return {
+            "success": True,
+            **freshness
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Freshness check error: {str(e)}")
+
+
+@router.get("/freshness-all")
+async def get_all_data_freshness(
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    모니터링 중인 모든 코인의 데이터 신선도 확인
+    """
+    try:
+        from app.models.coin import Coin
+        from sqlalchemy import select, and_
+        
+        # 모니터링 중인 코인 조회
+        stmt = select(Coin).where(
+            and_(
+                Coin.is_active == True,
+                Coin.is_monitoring == True
+            )
+        )
+        result = await db.execute(stmt)
+        coins = result.scalars().all()
+        
+        freshness_results = {}
+        unified_service = UnifiedDataService(db, binance_service)
+        
+        for coin in coins:
+            timeframes = coin.monitoring_timeframes or ["1h"]
+            freshness_results[coin.symbol] = {
+                "market_type": coin.market_type
+            }
+            
+            for tf in timeframes:
+                freshness = await unified_service.get_data_freshness(coin.symbol, tf)
+                freshness_results[coin.symbol][tf] = freshness
+        
+        return {
+            "success": True,
+            "total_coins": len(coins),
+            "freshness": freshness_results
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Freshness check error: {str(e)}")
 
 
 # 사용 예시

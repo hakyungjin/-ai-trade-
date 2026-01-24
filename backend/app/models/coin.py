@@ -14,9 +14,10 @@ class Coin(Base):
     __tablename__ = "coins"
 
     id = Column(Integer, primary_key=True, index=True)
-    symbol = Column(String(20), nullable=False, unique=True, index=True)  # BTCUSDT
+    symbol = Column(String(20), nullable=False, index=True)  # BTCUSDT
     base_asset = Column(String(20), nullable=False)  # BTC
     quote_asset = Column(String(20), nullable=False)  # USDT
+    market_type = Column(String(10), nullable=False, default='spot', index=True)  # spot 또는 futures
     
     # 상태 관리
     is_active = Column(Boolean, default=True, index=True)  # 활성 모니터링 중
@@ -51,6 +52,8 @@ class Coin(Base):
         Index('idx_coin_active', 'is_active'),
         Index('idx_coin_monitoring', 'is_monitoring'),
         Index('idx_coin_priority', 'priority'),
+        Index('idx_coin_market_type', 'market_type'),
+        Index('idx_coin_symbol_market', 'symbol', 'market_type', unique=True),  # 심볼+마켓타입 유니크
     )
 
 

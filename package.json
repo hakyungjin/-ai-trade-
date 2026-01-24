@@ -1,0 +1,21 @@
+{
+  "name": "crypto-ai-trader",
+  "version": "1.0.0",
+  "description": "AI-powered cryptocurrency trading system",
+  "scripts": {
+    "dev": "concurrently \"npm run backend:dev\" \"npm run frontend:dev\"",
+    "backend:dev": "cd backend && .venv\\Scripts\\activate.bat && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000",
+    "frontend:dev": "cd frontend && npm run dev",
+    "backend:install": "cd backend && pip install -r requirements.txt",
+    "frontend:install": "cd frontend && npm install",
+    "install:all": "npm run backend:install && npm run frontend:install",
+    "backend": "cd backend && .venv\\Scripts\\activate.bat && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000",
+    "frontend": "cd frontend && npm run dev",
+    "migration:new": "cd backend && .venv\\Scripts\\python.exe -m alembic revision --autogenerate -m",
+    "migration:upgrade": "cd backend && .venv\\Scripts\\python.exe -m alembic upgrade head",
+    "migration:downgrade": "cd backend && .venv\\Scripts\\python.exe -m alembic downgrade -1"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}

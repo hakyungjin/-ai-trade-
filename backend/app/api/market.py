@@ -11,8 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.binance_service import BinanceService
 from app.services.binance_stream import binance_stream_manager
 from app.services.market_data_service import MarketDataService
+from app.services.unified_data_service import UnifiedDataService
 from app.config import get_settings
-from app.database import get_db
+from app.database import get_db, AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -513,8 +514,10 @@ async def get_klines(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    캔들스틱 차트 데이터 조회 (OHLCV)
-    - 데이터 조회 후 DB에 자동 저장
+    캔들스틱 차트 데이터 조회 (OHLCV) - DB 우선 조회
+    - DB에서 먼저 데이터 조회
+    - 없는 데이터만 Binance API에서 가져오기
+    - 새로 가져온 데이터는 자동으로 DB에 저장
 
     - **symbol**: 심볼 (예: BTCUSDT)
     - **interval**: 캔들 간격 (1m, 5m, 15m, 30m, 1h, 4h, 1d, 1w)
@@ -522,30 +525,18 @@ async def get_klines(
     """
     binance = get_binance_service()
     symbol = symbol.upper()
-    print(f"📊 Fetching klines for {symbol} {interval} (limit: {limit})")
+    logger.info(f"📊 Fetching klines for {symbol} {interval} (limit: {limit})")
 
     try:
-        klines = await binance.get_klines(symbol=symbol, interval=interval, limit=limit)
-        print(f"✅ Fetched {len(klines)} klines from Binance")
+        # UnifiedDataService를 사용하여 DB 우선 조회 + 증분 수집
+        unified_service = UnifiedDataService(db, binance)
+        klines = await unified_service.get_klines_with_cache(
+            symbol=symbol,
+            timeframe=interval,
+            limit=limit
+        )
         
-        # DB에 저장
-        if klines:
-            try:
-                print(f"💾 Saving {len(klines)} candles to DB...")
-                market_service = MarketDataService(db)
-                result = await market_service.save_candles(
-                    symbol=symbol,
-                    timeframe=interval,
-                    candles=klines
-                )
-                print(f"✅ Successfully saved {len(klines)} candles for {symbol} {interval}")
-                logger.info(f"✅ Saved {len(klines)} candles for {symbol} {interval}")
-            except Exception as db_error:
-                print(f"❌ Failed to save candles to DB: {db_error}")
-                import traceback
-                traceback.print_exc()
-                logger.warning(f"⚠️ Failed to save candles to DB: {db_error}")
-                # DB 저장 실패해도 데이터는 반환
+        logger.info(f"✅ Retrieved {len(klines)} candles for {symbol} {interval} (from DB + incremental fetch)")
 
         return {
             "success": True,
@@ -553,13 +544,13 @@ async def get_klines(
             "interval": interval,
             "data": klines,
             "count": len(klines),
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "source": "db_cache"  # 데이터 소스 표시
         }
     except Exception as e:
-        print(f"❌ Error fetching klines: {e}")
+        logger.error(f"❌ Error fetching klines: {e}")
         import traceback
         traceback.print_exc()
-        logger.error(f"❌ Error fetching klines: {e}")
         return {"success": False, "error": str(e)}
 
 
@@ -593,16 +584,25 @@ async def websocket_klines(websocket: WebSocket, symbol: str, interval: str = "1
         }
         UPDATE_INTERVAL = update_intervals.get(interval, 60)
 
-        # 초기 데이터 전송 (최근 200개 캔들) - Retry 로직 포함
+        # 초기 데이터 전송 (최근 200개 캔들) - DB 캐시 우선 조회
         initial_klines = None
         retry_count = 0
         max_retries = 3
         
         while retry_count < max_retries and initial_klines is None:
             try:
-                print(f"Loading initial klines: {symbol} {interval} (attempt {retry_count + 1})")
-                initial_klines = await binance.get_klines(symbol=symbol, interval=interval, limit=200)
-                print(f"Initial klines loaded: {len(initial_klines)} candles for {symbol} {interval}")
+                print(f"Loading initial klines: {symbol} {interval} (attempt {retry_count + 1}) - DB first")
+                
+                # DB 세션 생성하여 UnifiedDataService 사용
+                async with AsyncSessionLocal() as db_session:
+                    unified_service = UnifiedDataService(db_session, binance)
+                    initial_klines = await unified_service.get_klines_with_cache(
+                        symbol=symbol,
+                        timeframe=interval,
+                        limit=200
+                    )
+                
+                print(f"Initial klines loaded: {len(initial_klines)} candles for {symbol} {interval} (from DB cache)")
                 break
             except Exception as e:
                 retry_count += 1

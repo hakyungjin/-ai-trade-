@@ -153,27 +153,53 @@ class BinanceService:
         self,
         symbol: str,
         interval: str = "1h",
-        limit: int = 100
+        limit: int = 100,
+        startTime: Optional[int] = None,
+        endTime: Optional[int] = None
     ) -> List[Dict[str, Any]]:
-        """캔들 데이터 조회 (실제 바이낸스 API 사용)"""
+        """
+        캔들 데이터 조회 (실제 바이낸스 API 사용)
+        
+        Args:
+            symbol: 거래쌍 (예: BTCUSDT)
+            interval: 캔들 주기 (1m, 5m, 15m, 1h, 4h, 1d, 1w)
+            limit: 조회할 캔들 개수 (최대 1000)
+            startTime: 시작 시간 (밀리초, optional)
+            endTime: 종료 시간 (밀리초, optional)
+        """
         interval_map = {
             "1m": KLINE_INTERVAL_1MINUTE,
+            "3m": KLINE_INTERVAL_3MINUTE,
             "5m": KLINE_INTERVAL_5MINUTE,
             "15m": KLINE_INTERVAL_15MINUTE,
             "30m": KLINE_INTERVAL_30MINUTE,
             "1h": KLINE_INTERVAL_1HOUR,
+            "2h": KLINE_INTERVAL_2HOUR,
             "4h": KLINE_INTERVAL_4HOUR,
+            "6h": KLINE_INTERVAL_6HOUR,
+            "8h": KLINE_INTERVAL_8HOUR,
+            "12h": KLINE_INTERVAL_12HOUR,
             "1d": KLINE_INTERVAL_1DAY,
             "1w": KLINE_INTERVAL_1WEEK,
         }
 
         kline_interval = interval_map.get(interval, KLINE_INTERVAL_1HOUR)
+        
+        # API 파라미터 구성
+        kwargs = {
+            "symbol": symbol,
+            "interval": kline_interval,
+            "limit": limit
+        }
+        if startTime:
+            kwargs["startTime"] = startTime
+        if endTime:
+            kwargs["endTime"] = endTime
+        
         # 마켓 데이터는 실제 바이낸스 API 사용
         klines = await self._run_sync(
             self.market_client.get_klines,
-            symbol=symbol,
-            interval=kline_interval,
-            limit=limit
+            **kwargs
         )
 
         return [

@@ -21,6 +21,16 @@ interface Signal {
   predicted_direction: string;
   current_price: number;
   analysis: string;
+  // XGBoost 모델 추가 필드
+  detailed_signal?: 'STRONG_BUY' | 'BUY' | 'HOLD' | 'SELL' | 'STRONG_SELL';
+  signal_value?: number;
+  probabilities?: {
+    STRONG_SELL?: number;
+    SELL?: number;
+    HOLD?: number;
+    BUY?: number;
+    STRONG_BUY?: number;
+  };
 }
 
 interface TradingSettings {

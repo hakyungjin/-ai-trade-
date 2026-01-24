@@ -9,21 +9,24 @@ from app.database import init_db, close_db
 from app.services.binance_stream import binance_stream_manager
 from app.services.binance_service import BinanceService
 from app.services.batch_candle_collector import BatchCandleCollector
+from app.services.smart_candle_scheduler import SmartCandleScheduler, init_scheduler
 
 logger = logging.getLogger(__name__)
 
-# 배치 수집기 인스턴스
+# 배치 수집기 인스턴스 (레거시 - 향후 제거 예정)
 batch_collector: BatchCandleCollector = None
+# 스마트 스케줄러 인스턴스
+smart_scheduler: SmartCandleScheduler = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """앱 시작/종료 시 DB 연결 및 스트림 관리"""
-    global batch_collector
+    global batch_collector, smart_scheduler
     
     await init_db()
     
-    # 배치 캔들 수집기 초기화 및 시작
+    # 바이낸스 서비스 초기화
     try:
         config = get_settings()
         binance = BinanceService(
@@ -31,18 +34,25 @@ async def lifespan(app: FastAPI):
             secret_key=config.binance_secret_key,
             testnet=config.binance_testnet
         )
-        batch_collector = BatchCandleCollector(binance)
         
-        # 백그라운드 작업으로 주기적 수집 시작 (1시간마다)
-        # 앱이 시작되면 첫 수집은 지연시키기 (5초 후)
-        asyncio.create_task(delayed_collection_start(batch_collector, delay=5))
-        logger.info("✅ Batch candle collector initialized")
+        # 🚀 스마트 스케줄러 초기화 및 시작 (권장)
+        smart_scheduler = init_scheduler(binance)
+        asyncio.create_task(delayed_scheduler_start(smart_scheduler, delay=5))
+        logger.info("✅ Smart candle scheduler initialized")
+        
+        # 레거시 배치 수집기 (비활성화 - 스마트 스케줄러로 대체)
+        # batch_collector = BatchCandleCollector(binance)
+        # asyncio.create_task(delayed_collection_start(batch_collector, delay=5))
+        # logger.info("✅ Batch candle collector initialized")
+        
     except Exception as e:
-        logger.error(f"❌ Error initializing batch collector: {e}")
+        logger.error(f"❌ Error initializing scheduler: {e}")
     
     yield
     
     # 종료 시
+    if smart_scheduler:
+        await smart_scheduler.stop()
     if batch_collector:
         batch_collector.stop_periodic_collection()
     await binance_stream_manager.shutdown()
@@ -50,7 +60,7 @@ async def lifespan(app: FastAPI):
 
 
 async def delayed_collection_start(collector: BatchCandleCollector, delay: int = 5):
-    """지연 후 주기적 수집 시작"""
+    """지연 후 주기적 수집 시작 (레거시)"""
     await asyncio.sleep(delay)
     logger.info("🚀 Starting background candle collection...")
     await collector.start_periodic_collection(
@@ -58,6 +68,15 @@ async def delayed_collection_start(collector: BatchCandleCollector, delay: int =
         limit=500,
         collect_interval_hours=1
     )
+
+
+async def delayed_scheduler_start(scheduler: SmartCandleScheduler, delay: int = 5):
+    """지연 후 스마트 스케줄러 시작"""
+    await asyncio.sleep(delay)
+    logger.info("🚀 Starting smart candle scheduler...")
+    # 주요 타임프레임만 수집 (1h, 4h)
+    # 필요 시 timeframes 리스트에 추가 (예: ["1m", "5m", "15m", "1h", "4h"])
+    await scheduler.start(timeframes=["1h", "4h"])
 
 app = FastAPI(
     title="Crypto AI Trader",
