@@ -11,7 +11,7 @@ from app.services.weighted_strategy import WeightedStrategy
 from app.services.technical_indicators import TechnicalIndicators
 from app.services.vector_pattern_service import VectorPatternService
 from app.services.unified_data_service import UnifiedDataService
-from app.services.trained_model_service import get_trained_model_service
+from app.services.trained_model_service import get_trained_model_service, check_model_exists, get_available_models
 from app.config import get_settings
 from app.database import get_db
 from app.models.vector_pattern import VectorPattern
@@ -86,6 +86,46 @@ class TradingRule(BaseModel):
     description: str
 
 
+@router.get("/models")
+async def get_models_list():
+    """사용 가능한 AI 모델 목록 조회"""
+    models = get_available_models()
+    
+    # 모델 이름에서 심볼과 타임프레임 추출
+    model_info = []
+    for model in models:
+        # btcusdt_5m_v2 -> symbol: BTCUSDT, timeframe: 5m, version: v2
+        parts = model.split('_')
+        if len(parts) >= 2:
+            symbol = parts[0].upper()
+            timeframe = parts[1]
+            version = parts[2] if len(parts) > 2 else 'v1'
+            model_info.append({
+                "model_name": model,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "version": version
+            })
+    
+    return {
+        "count": len(models),
+        "models": model_info
+    }
+
+
+@router.get("/models/{symbol}")
+async def check_symbol_model(symbol: str, timeframe: str = "5m"):
+    """특정 심볼의 AI 모델 존재 여부 확인"""
+    exists = check_model_exists(symbol, timeframe)
+    
+    return {
+        "symbol": symbol.upper(),
+        "timeframe": timeframe,
+        "model_exists": exists,
+        "message": f"✅ {symbol.upper()} ({timeframe}) 모델 사용 가능" if exists else f"⚠️ {symbol.upper()} ({timeframe}) 모델 없음"
+    }
+
+
 @router.post("/predict", response_model=PredictionResponse)
 async def get_prediction(
     request: PredictionRequest,
@@ -125,16 +165,22 @@ async def get_prediction(
             )
             logger.info(f"📊 Retrieved {len(candles)} candles from Binance API")
 
-        # 학습된 XGBoost 모델만 사용
-        trained_service = get_trained_model_service()
+        # 심볼별 학습된 XGBoost 모델 사용
+        if not check_model_exists(request.symbol, request.timeframe):
+            raise HTTPException(
+                status_code=503, 
+                detail=f"{request.symbol} AI 모델이 없습니다. ai-model/models/xgboost_{request.symbol.lower()}_{request.timeframe}_v2.joblib 파일이 필요합니다."
+            )
+        
+        trained_service = get_trained_model_service(request.symbol, request.timeframe)
         
         if not trained_service.is_loaded:
             raise HTTPException(
                 status_code=503, 
-                detail="AI 모델이 로드되지 않았습니다. ai-model/models/xgboost_btcusdt_5m_v2.joblib 파일을 확인하세요."
+                detail=f"{request.symbol} AI 모델 로드에 실패했습니다."
             )
         
-        logger.info(f"🤖 Using trained XGBoost model for {request.symbol}")
+        logger.info(f"🤖 Using trained XGBoost model for {request.symbol} ({request.timeframe})")
         prediction = trained_service.predict(candles)
         
         if prediction.get('confidence', 0) == 0:
@@ -187,6 +233,7 @@ async def get_combined_analysis(
         
         # market_type 정규화
         market_type = request.market_type.lower() if request.market_type else 'spot'
+        logger.info(f"🔍 Combined analysis request: {request.symbol} {request.timeframe} market_type={market_type}")
 
         # 현재가 조회 (마켓 타입에 따라 API 분기)
         price_data = await binance.get_current_price(request.symbol, market_type=market_type)
@@ -255,26 +302,31 @@ async def get_combined_analysis(
                 final_confidence=0.0
             )
 
-        # ===== AI 예측 (XGBoost 모델) =====
+        # ===== AI 예측 (심볼별 XGBoost 모델) =====
         ai_prediction = None
-        try:
-            trained_service = get_trained_model_service()
-            if trained_service.is_loaded:
-                logger.info(f"🤖 Using trained XGBoost model for {request.symbol}")
-                ai_prediction = trained_service.predict(candles)
-                logger.info(f"✅ XGBoost prediction: {ai_prediction.get('signal')} (conf: {ai_prediction.get('confidence'):.2f})")
-            else:
-                logger.warning("⚠️ XGBoost model not loaded")
-        except Exception as e:
-            logger.warning(f"⚠️ XGBoost model error: {e}")
-            ai_prediction = None
+        model_exists = check_model_exists(request.symbol, request.timeframe)
+        
+        if model_exists:
+            try:
+                trained_service = get_trained_model_service(request.symbol, request.timeframe)
+                if trained_service.is_loaded:
+                    logger.info(f"🤖 Using trained XGBoost model for {request.symbol} ({request.timeframe})")
+                    ai_prediction = trained_service.predict(candles)
+                    logger.info(f"✅ XGBoost prediction: {ai_prediction.get('signal')} (conf: {ai_prediction.get('confidence'):.2f})")
+                else:
+                    logger.warning(f"⚠️ XGBoost model for {request.symbol} not loaded")
+            except Exception as e:
+                logger.warning(f"⚠️ XGBoost model error for {request.symbol}: {e}")
+                ai_prediction = None
+        else:
+            logger.info(f"📝 No AI model for {request.symbol} ({request.timeframe})")
         
         if ai_prediction is None:
             ai_prediction = {
                 "signal": "HOLD",
-                "confidence": 0.5,
+                "confidence": 0.0,
                 "direction": "NEUTRAL",
-                "analysis": "AI 모델이 로드되지 않았습니다"
+                "analysis": f"{request.symbol} AI 모델이 없습니다. 기술적 지표만 참고하세요."
             }
 
         # ===== 가중치 기반 전략 =====

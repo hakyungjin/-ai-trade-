@@ -42,6 +42,10 @@ export const aiApi = {
   getMarketAnalysis: (symbol: string, timeframe = '1h') =>
     apiClient.get(`/ai/market-analysis/${symbol}`, { params: { timeframe } }),
   getSignals: () => apiClient.get('/ai/signals'),
+  // AI 모델 관련
+  getModels: () => apiClient.get('/ai/models'),
+  checkModel: (symbol: string, timeframe = '5m') =>
+    apiClient.get(`/ai/models/${symbol}`, { params: { timeframe } }),
 };
 
 // Settings API
@@ -74,13 +78,13 @@ export const marketApi = {
   search: (query: string) =>
     apiClient.get('/market/search', { params: { query } }),
 
-  // 캔들스틱 차트 데이터
-  getKlines: (symbol: string, interval = '1h', limit = 100) =>
-    apiClient.get(`/market/klines/${symbol}`, { params: { interval, limit } }),
+  // 캔들스틱 차트 데이터 (현물/선물 지원)
+  getKlines: (symbol: string, interval = '1h', limit = 100, market_type = 'spot') =>
+    apiClient.get(`/market/klines/${symbol}`, { params: { interval, limit, market_type } }),
 
   // 미니 차트 데이터
-  getMiniChart: (symbol: string, interval = '1h', limit = 24) =>
-    apiClient.get(`/market/mini-chart/${symbol}`, { params: { interval, limit } }),
+  getMiniChart: (symbol: string, interval = '1h', limit = 24, market_type = 'spot') =>
+    apiClient.get(`/market/mini-chart/${symbol}`, { params: { interval, limit, market_type } }),
 };
 
 // WebSocket URL 헬퍼

@@ -515,32 +515,46 @@ async def get_klines(
     symbol: str,
     interval: str = Query(default="1h", pattern="^(1m|5m|15m|30m|1h|4h|1d|1w)$"),
     limit: int = Query(default=100, ge=1, le=1000),
+    market_type: str = Query(default="spot"),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    캔들스틱 차트 데이터 조회 (OHLCV) - DB 우선 조회
-    - DB에서 먼저 데이터 조회
-    - 없는 데이터만 Binance API에서 가져오기
+    캔들스틱 차트 데이터 조회 (OHLCV) - 현물/선물 지원
+    - DB에서 먼저 데이터 조회 (현물만)
+    - 선물은 바이낸스 API에서 직접 조회
     - 새로 가져온 데이터는 자동으로 DB에 저장
 
     - **symbol**: 심볼 (예: BTCUSDT)
     - **interval**: 캔들 간격 (1m, 5m, 15m, 30m, 1h, 4h, 1d, 1w)
     - **limit**: 조회할 캔들 수 (최대 1000)
+    - **market_type**: 마켓 타입 (spot 또는 futures)
     """
     binance = get_binance_service()
     symbol = symbol.upper()
-    logger.info(f"📊 Fetching klines for {symbol} {interval} (limit: {limit})")
+    market_type = market_type.lower()
+    logger.info(f"📊 Fetching klines for {symbol} {interval} (limit: {limit}, market: {market_type})")
 
     try:
-        # UnifiedDataService를 사용하여 DB 우선 조회 + 증분 수집
-        unified_service = UnifiedDataService(db, binance)
-        klines = await unified_service.get_klines_with_cache(
-            symbol=symbol,
-            timeframe=interval,
-            limit=limit
-        )
+        if market_type == 'futures':
+            # 선물은 바이낸스 API에서 직접 조회
+            klines = await binance.get_klines(
+                symbol=symbol,
+                interval=interval,
+                limit=limit,
+                market_type='futures'
+            )
+            source = "binance_futures"
+        else:
+            # 현물은 DB 캐시 + 증분 수집
+            unified_service = UnifiedDataService(db, binance)
+            klines = await unified_service.get_klines_with_cache(
+                symbol=symbol,
+                timeframe=interval,
+                limit=limit
+            )
+            source = "db_cache"
         
-        logger.info(f"✅ Retrieved {len(klines)} candles for {symbol} {interval} (from DB + incremental fetch)")
+        logger.info(f"✅ Retrieved {len(klines)} candles for {symbol} {interval} ({source})")
 
         return {
             "success": True,
@@ -549,7 +563,7 @@ async def get_klines(
             "data": klines,
             "count": len(klines),
             "timestamp": datetime.now().isoformat(),
-            "source": "db_cache"  # 데이터 소스 표시
+            "source": source
         }
     except Exception as e:
         logger.error(f"❌ Error fetching klines: {e}")
@@ -719,18 +733,20 @@ async def websocket_klines(websocket: WebSocket, symbol: str, interval: str = "1
 async def get_mini_chart(
     symbol: str,
     interval: str = Query(default="1h"),
-    limit: int = Query(default=24)
+    limit: int = Query(default=24),
+    market_type: str = Query(default="spot")
 ):
     """
-    미니 차트용 간단한 가격 데이터 (스파크라인)
+    미니 차트용 간단한 가격 데이터 (스파크라인) - 현물/선물 지원
 
     프론트엔드에서 간단한 가격 추세 그래프를 그리기 위한 데이터
     """
     binance = get_binance_service()
     symbol = symbol.upper()
+    market_type = market_type.lower()
 
     try:
-        klines = await binance.get_klines(symbol=symbol, interval=interval, limit=limit)
+        klines = await binance.get_klines(symbol=symbol, interval=interval, limit=limit, market_type=market_type)
 
         # 간단한 형태로 변환 (close 가격만)
         prices = [k["close"] for k in klines]

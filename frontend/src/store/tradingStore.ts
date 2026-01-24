@@ -45,6 +45,8 @@ interface TradingSettings {
   trailing_stop_percent: number;
 }
 
+type MarketType = 'spot' | 'futures';
+
 interface TradingState {
   // Data
   balances: Balance[];
@@ -52,6 +54,7 @@ interface TradingState {
   currentSignal: Signal | null;
   settings: TradingSettings;
   selectedSymbol: string;
+  selectedMarketType: MarketType;
 
   // Loading states
   isLoading: boolean;
@@ -63,6 +66,7 @@ interface TradingState {
   setCurrentSignal: (signal: Signal | null) => void;
   setSettings: (settings: TradingSettings) => void;
   setSelectedSymbol: (symbol: string) => void;
+  setSelectedMarketType: (marketType: MarketType) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
 }
@@ -84,6 +88,7 @@ export const useTradingStore = create<TradingState>((set) => ({
     trailing_stop_percent: 0.01,
   },
   selectedSymbol: 'BTCUSDT',
+  selectedMarketType: 'spot',
 
   // Loading states
   isLoading: false,
@@ -95,6 +100,7 @@ export const useTradingStore = create<TradingState>((set) => ({
   setCurrentSignal: (currentSignal) => set({ currentSignal }),
   setSettings: (settings) => set({ settings }),
   setSelectedSymbol: (selectedSymbol) => set({ selectedSymbol }),
+  setSelectedMarketType: (selectedMarketType) => set({ selectedMarketType }),
   setLoading: (isLoading) => set({ isLoading }),
   setError: (error) => set({ error }),
 }));

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   TrendingUp,
   TrendingDown,
@@ -22,6 +22,7 @@ import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { marketApi, aiApi, apiClient } from '@/api/client';
 import { PriceChart } from './market';
+import { useTradingStore } from '@/store/tradingStore';
 
 type MarketType = 'spot' | 'futures';
 
@@ -54,8 +55,13 @@ interface WeightedAnalysis {
 }
 
 export function CoinAnalysis() {
-  // 마켓 타입
-  const [marketType, setMarketType] = useState<MarketType>('spot');
+  // 전역 상태에서 선택된 심볼과 마켓 타입 가져오기
+  const { 
+    selectedSymbol, 
+    setSelectedSymbol, 
+    selectedMarketType: marketType, 
+    setSelectedMarketType: setMarketType 
+  } = useTradingStore();
   
   // 기본 메이저 코인
   const defaultSpotSymbols = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT'];
@@ -64,8 +70,6 @@ export function CoinAnalysis() {
   const [monitoredCoins, setMonitoredCoins] = useState<MonitoredCoin[]>([]);
   const [spotSymbols, setSpotSymbols] = useState<string[]>(defaultSpotSymbols);
   const [futuresSymbols, setFuturesSymbols] = useState<string[]>(defaultFuturesSymbols);
-  
-  const [selectedSymbol, setSelectedSymbol] = useState('BTCUSDT');
   
   const [currentPrice, setCurrentPrice] = useState<number>(0);
   const [priceChange, setPriceChange] = useState<number>(0);
@@ -111,19 +115,30 @@ export function CoinAnalysis() {
     }
   }, [marketType, spotSymbols, futuresSymbols]);
 
+  // 요청 ID를 추적해서 레이스 컨디션 방지
+  const requestIdRef = useRef(0);
+
   // 현재가 + 분석 조회 (마켓 타입 반영)
-  const fetchData = async () => {
+  const fetchData = async (symbol: string, market: MarketType) => {
+    const currentRequestId = ++requestIdRef.current;
+    
     setLoading(true);
     setAnalysisLoading(true);
     
     try {
       const [tickerRes, analysisRes] = await Promise.all([
-        marketApi.getTicker(selectedSymbol, marketType),
-        aiApi.combinedAnalysis(selectedSymbol, '5m', marketType).catch((e) => {
+        marketApi.getTicker(symbol, market),
+        aiApi.combinedAnalysis(symbol, '5m', market).catch((e) => {
           console.warn('분석 조회 실패:', e?.message);
           return null;
         }),
       ]);
+
+      // 요청 ID가 변경되었으면 (다른 심볼이 선택됨) 결과 무시
+      if (currentRequestId !== requestIdRef.current) {
+        console.log(`[${symbol}] 요청 무시 - 다른 심볼이 선택됨`);
+        return;
+      }
 
       // 현재가
       if (tickerRes?.data) {
@@ -139,10 +154,15 @@ export function CoinAnalysis() {
         setWeightedAnalysis(analysisRes.data);
       }
     } catch (error) {
+      // 요청 ID가 변경되었으면 에러도 무시
+      if (currentRequestId !== requestIdRef.current) return;
       console.error('데이터 조회 실패:', error);
     } finally {
-      setLoading(false);
-      setAnalysisLoading(false);
+      // 요청 ID가 같을 때만 로딩 상태 해제
+      if (currentRequestId === requestIdRef.current) {
+        setLoading(false);
+        setAnalysisLoading(false);
+      }
     }
   };
 
@@ -150,9 +170,9 @@ export function CoinAnalysis() {
     setCurrentPrice(0);
     setPriceChange(0);
     setWeightedAnalysis(null);
-    fetchData();
+    fetchData(selectedSymbol, marketType);
     
-    const interval = setInterval(fetchData, 15000);
+    const interval = setInterval(() => fetchData(selectedSymbol, marketType), 15000);
     return () => clearInterval(interval);
   }, [selectedSymbol, marketType]);
 
@@ -436,22 +456,32 @@ export function CoinAnalysis() {
                   {weightedAnalysis.ai_prediction && (
                     <div className="pt-2 border-t">
                       <div className="text-xs font-semibold text-muted-foreground mb-2">
-                        AI 예측
+                        🤖 AI 예측
                       </div>
-                      <div className="grid grid-cols-2 gap-2 text-sm">
-                        <div>
-                          <span className="text-muted-foreground">신호:</span>
-                          <Badge variant="outline" className="ml-1">
-                            {weightedAnalysis.ai_prediction.signal}
-                          </Badge>
+                      {weightedAnalysis.ai_prediction.confidence === 0 || 
+                       weightedAnalysis.ai_prediction.analysis?.includes('모델이 없습니다') ? (
+                        <div className="text-sm text-amber-600 bg-amber-50 dark:bg-amber-900/20 rounded p-2">
+                          ⚠️ {selectedSymbol} AI 모델이 없습니다
+                          <div className="text-xs text-muted-foreground mt-1">
+                            기술적 지표만 참고하세요
+                          </div>
                         </div>
-                        <div>
-                          <span className="text-muted-foreground">신뢰도:</span>
-                          <span className="ml-1 font-semibold">
-                            {(weightedAnalysis.ai_prediction.confidence * 100).toFixed(0)}%
-                          </span>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-2 text-sm">
+                          <div>
+                            <span className="text-muted-foreground">신호:</span>
+                            <Badge variant="outline" className="ml-1">
+                              {weightedAnalysis.ai_prediction.signal}
+                            </Badge>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">신뢰도:</span>
+                            <span className="ml-1 font-semibold">
+                              {(weightedAnalysis.ai_prediction.confidence * 100).toFixed(0)}%
+                            </span>
+                          </div>
                         </div>
-                      </div>
+                      )}
                     </div>
                   )}
 

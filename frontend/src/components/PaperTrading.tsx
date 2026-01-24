@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   TrendingUp,
   TrendingDown,
@@ -29,6 +29,7 @@ import {
 import { cn } from '@/lib/utils';
 import { marketApi, apiClient } from '@/api/client';
 import { usePaperTradingStore } from '@/store/paperTradingStore';
+import { useTradingStore } from '@/store/tradingStore';
 import type { MarketType, PositionType, PaperPosition } from '@/store/paperTradingStore';
 import { PriceChart } from './market';
 
@@ -54,8 +55,13 @@ export function PaperTrading() {
     resetAccount,
   } = store;
 
-  // 마켓 타입 (현물/선물)
-  const [marketType, setMarketType] = useState<MarketType>('spot');
+  // 전역 상태에서 선택된 심볼과 마켓 타입 가져오기
+  const { 
+    selectedSymbol, 
+    setSelectedSymbol, 
+    selectedMarketType: marketType, 
+    setSelectedMarketType: setMarketType 
+  } = useTradingStore();
 
   // 기본 코인
   const defaultSpotSymbols = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT'];
@@ -63,8 +69,6 @@ export function PaperTrading() {
   
   const [spotSymbols, setSpotSymbols] = useState<string[]>(defaultSpotSymbols);
   const [futuresSymbols, setFuturesSymbols] = useState<string[]>(defaultFuturesSymbols);
-
-  const [selectedSymbol, setSelectedSymbol] = useState('BTCUSDT');
   const [currentPrice, setCurrentPrice] = useState<number>(0);
   const [priceChange, setPriceChange] = useState<number>(0);
   const [loading, setLoading] = useState(false);
@@ -108,26 +112,38 @@ export function PaperTrading() {
     }
   }, [marketType, spotSymbols, futuresSymbols]);
 
+  // 요청 ID를 추적해서 레이스 컨디션 방지
+  const priceRequestIdRef = useRef(0);
+
   // 현재가 조회
-  const fetchPrice = async () => {
+  const fetchPrice = async (symbol: string, market: MarketType) => {
+    const currentRequestId = ++priceRequestIdRef.current;
+    
     setLoading(true);
     try {
-      const response = await marketApi.getTicker(selectedSymbol, marketType);
+      const response = await marketApi.getTicker(symbol, market);
+      
+      // 요청 ID가 변경되었으면 결과 무시
+      if (currentRequestId !== priceRequestIdRef.current) return;
+      
       const tickerData = response?.data?.data || response?.data;
       if (tickerData?.price !== undefined) {
         setCurrentPrice(tickerData.price);
         setPriceChange(tickerData.priceChangePercent || 0);
       }
     } catch (error) {
+      if (currentRequestId !== priceRequestIdRef.current) return;
       console.error('Failed to fetch price:', error);
     } finally {
-      setLoading(false);
+      if (currentRequestId === priceRequestIdRef.current) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
-    fetchPrice();
-    const interval = setInterval(fetchPrice, 5000);
+    fetchPrice(selectedSymbol, marketType);
+    const interval = setInterval(() => fetchPrice(selectedSymbol, marketType), 5000);
     return () => clearInterval(interval);
   }, [selectedSymbol, marketType]);
 
@@ -246,7 +262,7 @@ export function PaperTrading() {
         </div>
         <div className="flex items-center gap-2">
           <Button
-            onClick={fetchPrice}
+            onClick={() => fetchPrice(selectedSymbol, marketType)}
             variant="outline"
             size="sm"
             disabled={loading}

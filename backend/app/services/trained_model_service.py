@@ -16,6 +16,22 @@ logger = logging.getLogger(__name__)
 class TrainedModelService:
     """학습된 모델을 사용한 예측 서비스"""
     
+    # 5클래스 레이블 매핑
+    LABEL_MAP_5 = {
+        0: ('STRONG_SELL', -2),
+        1: ('SELL', -1),
+        2: ('HOLD', 0),
+        3: ('BUY', 1),
+        4: ('STRONG_BUY', 2)
+    }
+    
+    # 3클래스 레이블 매핑
+    LABEL_MAP_3 = {
+        0: ('SELL', -1),
+        1: ('HOLD', 0),
+        2: ('BUY', 1)
+    }
+    
     def __init__(
         self,
         model_path: Optional[str] = None,
@@ -26,15 +42,10 @@ class TrainedModelService:
         self.scaler = None
         self.feature_names = None
         self.is_loaded = False
+        self.num_classes = 5  # 기본값
         
-        # 레이블 매핑
-        self.label_map = {
-            0: ('STRONG_SELL', -2),
-            1: ('SELL', -1),
-            2: ('HOLD', 0),
-            3: ('BUY', 1),
-            4: ('STRONG_BUY', 2)
-        }
+        # 레이블 매핑 (모델 로드 시 동적으로 설정)
+        self.label_map = self.LABEL_MAP_5
         
         self.signal_to_simple = {
             'STRONG_SELL': 'SELL',
@@ -61,8 +72,24 @@ class TrainedModelService:
             self.feature_names = joblib.load(features_path)
             self.is_loaded = True
             
+            # 모델의 클래스 수 확인
+            if hasattr(self.model, 'n_classes_'):
+                self.num_classes = self.model.n_classes_
+            elif hasattr(self.model, 'classes_'):
+                self.num_classes = len(self.model.classes_)
+            else:
+                self.num_classes = 5  # 기본값
+            
+            # 클래스 수에 따라 레이블 매핑 설정
+            if self.num_classes == 3:
+                self.label_map = self.LABEL_MAP_3
+                logger.info(f"   Using 3-class model (SELL/HOLD/BUY)")
+            else:
+                self.label_map = self.LABEL_MAP_5
+                logger.info(f"   Using 5-class model (STRONG_SELL/SELL/HOLD/BUY/STRONG_BUY)")
+            
             logger.info(f"✅ Loaded trained model from {model_path}")
-            logger.info(f"   Features: {len(self.feature_names)}")
+            logger.info(f"   Features: {len(self.feature_names)}, Classes: {self.num_classes}")
             return True
             
         except Exception as e:
@@ -302,10 +329,22 @@ class TrainedModelService:
         confidence: float,
         probabilities: np.ndarray
     ) -> str:
-        """분석 텍스트 생성"""
-        buy_prob = probabilities[3] + probabilities[4]  # BUY + STRONG_BUY
-        sell_prob = probabilities[0] + probabilities[1]  # STRONG_SELL + SELL
-        hold_prob = probabilities[2]  # HOLD
+        """분석 텍스트 생성 (3클래스/5클래스 모델 모두 지원)"""
+        
+        # 클래스 수에 따라 확률 계산
+        if len(probabilities) == 3:
+            # 3클래스: SELL(0), HOLD(1), BUY(2)
+            sell_prob = probabilities[0]
+            hold_prob = probabilities[1]
+            buy_prob = probabilities[2]
+        elif len(probabilities) == 5:
+            # 5클래스: STRONG_SELL(0), SELL(1), HOLD(2), BUY(3), STRONG_BUY(4)
+            sell_prob = probabilities[0] + probabilities[1]
+            hold_prob = probabilities[2]
+            buy_prob = probabilities[3] + probabilities[4]
+        else:
+            # 알 수 없는 클래스 수
+            return f"신호: {signal} (신뢰도: {confidence*100:.1f}%)"
         
         analysis_parts = []
         
@@ -322,58 +361,148 @@ class TrainedModelService:
             f"확률 분포 - 매수: {buy_prob*100:.1f}%, 관망: {hold_prob*100:.1f}%, 매도: {sell_prob*100:.1f}%"
         )
         
-        # 강도 설명
+        # 강도 설명 (5클래스 모델만)
         if 'STRONG' in signal:
             analysis_parts.append("강한 신호입니다. 포지션 크기 조절에 참고하세요.")
         
         return " | ".join(analysis_parts)
 
 
-# 싱글톤 인스턴스
-_trained_model_service: Optional[TrainedModelService] = None
+# 심볼별 모델 캐시
+_model_cache: Dict[str, TrainedModelService] = {}
 
 
-def get_trained_model_service(model_name: str = 'xgboost_btcusdt_5m_v2') -> TrainedModelService:
-    """학습된 모델 서비스 인스턴스 반환 (기본: 5분봉 v2 모델)"""
-    global _trained_model_service
+def get_model_dir() -> str:
+    """모델 디렉토리 경로 반환"""
+    current_file = os.path.abspath(__file__)
+    services_dir = os.path.dirname(current_file)      # backend/app/services
+    app_dir = os.path.dirname(services_dir)           # backend/app
+    backend_dir = os.path.dirname(app_dir)            # backend
+    project_root = os.path.dirname(backend_dir)       # project root
+    model_dir = os.path.join(project_root, 'ai-model', 'models')
     
-    if _trained_model_service is None:
-        _trained_model_service = TrainedModelService()
-        
-        # ai-model 폴더에서 모델 로드 (backend 기준 상대 경로)
-        # __file__ = backend/app/services/trained_model_service.py
-        current_file = os.path.abspath(__file__)
-        services_dir = os.path.dirname(current_file)      # backend/app/services
-        app_dir = os.path.dirname(services_dir)           # backend/app
-        backend_dir = os.path.dirname(app_dir)            # backend
-        project_root = os.path.dirname(backend_dir)       # project root
-        
-        model_dir = os.path.join(project_root, 'ai-model', 'models')
-        
-        logger.info(f"📁 Looking for models in: {model_dir}")
-        
-        # 5분봉 v2 모델만 사용
-        model_path = os.path.join(model_dir, f'{model_name}.joblib')
-        scaler_path = os.path.join(model_dir, f'{model_name}_scaler.joblib')
-        features_path = os.path.join(model_dir, f'{model_name}_features.joblib')
-        
-        logger.info(f"📁 Model path: {model_path}")
-        logger.info(f"📁 Model exists: {os.path.exists(model_path)}")
-        
-        if os.path.exists(model_path):
-            if _trained_model_service.load_model(model_path, scaler_path, features_path):
-                logger.info(f"✅ Using trained model: {model_name}")
-            else:
-                logger.warning(f"⚠️ Failed to load model: {model_name}")
-        else:
-            logger.warning(f"📝 Model not found: {model_path}")
-            # 디렉토리 내용 확인
-            if os.path.exists(model_dir):
-                files = os.listdir(model_dir)
-                logger.info(f"📁 Available files in model_dir: {files}")
-            else:
-                logger.warning(f"📁 Model directory doesn't exist: {model_dir}")
-            logger.info(f"   Train it using: python ai-model/scripts/train_model.py")
+    # 디버그 로그
+    if not hasattr(get_model_dir, '_logged'):
+        logger.info(f"📁 Current file: {current_file}")
+        logger.info(f"📁 Project root: {project_root}")
+        logger.info(f"📁 Model dir: {model_dir}")
+        logger.info(f"📁 Model dir exists: {os.path.exists(model_dir)}")
+        if os.path.exists(model_dir):
+            files = os.listdir(model_dir)
+            logger.info(f"📁 Model files: {[f for f in files if f.endswith('.joblib') and '_scaler' not in f and '_features' not in f]}")
+        get_model_dir._logged = True
     
-    return _trained_model_service
+    return model_dir
+
+
+def get_available_models() -> List[str]:
+    """사용 가능한 모델 목록 반환"""
+    model_dir = get_model_dir()
+    if not os.path.exists(model_dir):
+        return []
+    
+    models = []
+    for f in os.listdir(model_dir):
+        # xgboost_btcusdt_5m_v2.joblib 형태에서 심볼 추출
+        if f.startswith('xgboost_') and f.endswith('.joblib') and '_scaler' not in f and '_features' not in f:
+            # xgboost_btcusdt_5m_v2.joblib -> btcusdt_5m_v2
+            model_name = f.replace('xgboost_', '').replace('.joblib', '')
+            models.append(model_name)
+    
+    return models
+
+
+def find_highest_version_model(symbol: str, timeframe: str) -> Optional[str]:
+    """
+    심볼과 타임프레임에 맞는 가장 높은 버전의 모델을 찾음
+    
+    예: xgboost_btcusdt_5m_v3.joblib > xgboost_btcusdt_5m_v2.joblib > xgboost_btcusdt_5m.joblib
+    """
+    import re
+    
+    model_dir = get_model_dir()
+    if not os.path.exists(model_dir):
+        return None
+    
+    symbol_lower = symbol.lower()
+    pattern = f'xgboost_{symbol_lower}_{timeframe}'
+    
+    # 해당 심볼/타임프레임의 모든 모델 파일 찾기
+    matching_models = []
+    for f in os.listdir(model_dir):
+        if f.startswith(pattern) and f.endswith('.joblib') and '_scaler' not in f and '_features' not in f:
+            # 버전 번호 추출 (예: xgboost_btcusdt_5m_v2.joblib -> 2, xgboost_btcusdt_5m.joblib -> 0)
+            version_match = re.search(r'_v(\d+)\.joblib$', f)
+            if version_match:
+                version = int(version_match.group(1))
+            else:
+                version = 0  # v 없으면 버전 0 (v1 이전)
+            
+            model_key = f.replace('xgboost_', '').replace('.joblib', '')
+            matching_models.append((version, model_key, f))
+    
+    if not matching_models:
+        return None
+    
+    # 버전이 가장 높은 것 선택
+    matching_models.sort(key=lambda x: x[0], reverse=True)
+    best_version, best_model_key, best_file = matching_models[0]
+    
+    logger.info(f"🏆 Found {len(matching_models)} model(s) for {symbol} {timeframe}")
+    logger.info(f"   Best: {best_file} (v{best_version})")
+    
+    return best_model_key
+
+
+def get_trained_model_service(symbol: str, timeframe: str = '5m') -> TrainedModelService:
+    """
+    심볼별 학습된 모델 서비스 인스턴스 반환
+    가장 높은 버전의 모델을 자동으로 선택
+    
+    모델 명명 규칙: xgboost_{symbol}_{timeframe}_v{N}.joblib
+    예: xgboost_btcusdt_5m_v3.joblib
+    """
+    # 가장 높은 버전 모델 찾기
+    model_key = find_highest_version_model(symbol, timeframe)
+    
+    if not model_key:
+        logger.warning(f"⚠️ No model found for {symbol} {timeframe}")
+        empty_service = TrainedModelService()
+        empty_service.is_loaded = False
+        return empty_service
+    
+    # 캐시에 있으면 반환
+    if model_key in _model_cache:
+        cached = _model_cache[model_key]
+        if cached.is_loaded:
+            return cached
+    
+    # 모델 로드
+    model_dir = get_model_dir()
+    model_name = f'xgboost_{model_key}'
+    model_path = os.path.join(model_dir, f'{model_name}.joblib')
+    scaler_path = os.path.join(model_dir, f'{model_name}_scaler.joblib')
+    features_path = os.path.join(model_dir, f'{model_name}_features.joblib')
+    
+    service = TrainedModelService()
+    if service.load_model(model_path, scaler_path, features_path):
+        logger.info(f"✅ Loaded model for {symbol}: {model_name}")
+        _model_cache[model_key] = service
+        return service
+    
+    # 로드 실패
+    logger.warning(f"⚠️ Failed to load model: {model_name}")
+    empty_service = TrainedModelService()
+    empty_service.is_loaded = False
+    return empty_service
+
+
+def check_model_exists(symbol: str, timeframe: str = '5m') -> bool:
+    """특정 심볼의 모델이 존재하는지 확인 (가장 높은 버전 기준)"""
+    model_key = find_highest_version_model(symbol, timeframe)
+    exists = model_key is not None
+    
+    logger.info(f"🔍 Model check for {symbol} ({timeframe}): {'✅ Found' if exists else '❌ Not found'}")
+    
+    return exists
 
