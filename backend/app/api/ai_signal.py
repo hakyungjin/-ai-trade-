@@ -258,25 +258,15 @@ async def get_combined_analysis(
                 else:
                     logger.info(f"⚡ [Cache Only] Got {len(candles)} candles from DB")
             else:
-                # 기존 방식: DB + Binance 증분 수집
-                logger.info(f"🔄 Fetching candles for {request.symbol} {request.timeframe} (DB first)...")
-                candles = await unified_service.get_klines_with_cache(
+                # 항상 Binance에서 최신 데이터 조회 (실시간 분석을 위해)
+                logger.info(f"🔄 Fetching fresh candles for {request.symbol} {request.timeframe} from Binance...")
+                candles = await binance.get_klines(
                     symbol=request.symbol,
-                    timeframe=request.timeframe,
-                    limit=300  # 지표 계산을 위해 충분한 데이터 필요
+                    interval=request.timeframe,
+                    limit=300,  # 지표 계산을 위해 충분한 데이터
+                    market_type=market_type
                 )
-                logger.info(f"✅ Got {len(candles)} candles (DB cache + Binance)")
-                
-                # 캔들 데이터가 부족하면 Binance에서 직접 조회
-                if len(candles) < 100:
-                    logger.warning(f"⚠️ Insufficient candles from cache ({len(candles)}), fetching from Binance...")
-                    candles = await binance.get_klines(
-                        symbol=request.symbol,
-                        interval=request.timeframe,
-                        limit=300,  # 지표 계산을 위해 충분한 데이터
-                        market_type=market_type
-                    )
-                    logger.info(f"📊 Retrieved {len(candles)} candles from Binance API ({market_type})")
+                logger.info(f"📊 Retrieved {len(candles)} fresh candles from Binance API ({market_type})")
         except Exception as e:
             print(f"❌ Error fetching klines: {e}")
             import traceback
