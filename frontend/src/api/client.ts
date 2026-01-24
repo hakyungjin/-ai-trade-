@@ -32,11 +32,11 @@ export const tradingApi = {
 // AI API
 export const aiApi = {
   // AI 예측 - 버튼 클릭 시에만 호출 (5m: 학습된 모델과 일치)
-  predict: (symbol: string, timeframe = '5m') =>
-    apiClient.post('/ai/predict', { symbol, timeframe }),
+  predict: (symbol: string, timeframe = '5m', market_type = 'spot') =>
+    apiClient.post('/ai/predict', { symbol, timeframe, market_type }),
   // 가중치 기반 통합 분석 (AI + 기술적 지표) - 버튼 클릭 시에만 호출
-  combinedAnalysis: (symbol: string, timeframe = '5m') =>
-    apiClient.post('/ai/combined-analysis', { symbol, timeframe }),
+  combinedAnalysis: (symbol: string, timeframe = '5m', market_type = 'spot') =>
+    apiClient.post('/ai/combined-analysis', { symbol, timeframe, market_type }),
   parsePrompt: (prompt: string) =>
     apiClient.post('/ai/parse-prompt', { prompt }),
   getMarketAnalysis: (symbol: string, timeframe = '1h') =>
@@ -54,9 +54,10 @@ export const settingsApi = {
 
 // Market API - 실시간 마켓 데이터
 export const marketApi = {
-  // 티커 데이터
+  // 티커 데이터 (현물/선물 지원)
   getTickers: () => apiClient.get('/market/tickers'),
-  getTicker: (symbol: string) => apiClient.get(`/market/ticker/${symbol}`),
+  getTicker: (symbol: string, market_type = 'spot') => 
+    apiClient.get(`/market/ticker/${symbol}`, { params: { market_type } }),
 
   // 상승/하락 코인
   getGainersLosers: (limit = 10) =>

@@ -111,15 +111,15 @@ export function CoinAnalysis() {
     }
   }, [marketType, spotSymbols, futuresSymbols]);
 
-  // 현재가 + 분석 조회
+  // 현재가 + 분석 조회 (마켓 타입 반영)
   const fetchData = async () => {
     setLoading(true);
     setAnalysisLoading(true);
     
     try {
       const [tickerRes, analysisRes] = await Promise.all([
-        marketApi.getTicker(selectedSymbol),
-        aiApi.combinedAnalysis(selectedSymbol).catch((e) => {
+        marketApi.getTicker(selectedSymbol, marketType),
+        aiApi.combinedAnalysis(selectedSymbol, '5m', marketType).catch((e) => {
           console.warn('분석 조회 실패:', e?.message);
           return null;
         }),
@@ -154,7 +154,7 @@ export function CoinAnalysis() {
     
     const interval = setInterval(fetchData, 15000);
     return () => clearInterval(interval);
-  }, [selectedSymbol]);
+  }, [selectedSymbol, marketType]);
 
   // 심볼 검색
   const searchSymbols = async (query: string) => {
@@ -377,7 +377,7 @@ export function CoinAnalysis() {
           </Card>
 
           {/* 차트 */}
-          <PriceChart symbol={selectedSymbol} />
+          <PriceChart symbol={selectedSymbol} marketType={marketType} />
         </div>
 
         {/* 분석 패널 */}

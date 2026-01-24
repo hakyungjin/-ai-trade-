@@ -37,6 +37,7 @@ class PredictionRequest(BaseModel):
     symbol: str
     timeframe: str = "5m"  # 1m, 5m, 15m, 1h, 4h, 1d (기본값: 5m - 학습된 모델과 일치)
     cache_only: bool = False  # True면 DB 캐시만 사용 (API 호출 없음, 빠름!)
+    market_type: str = "spot"  # 'spot' 또는 'futures'
 
 
 class PredictionResponse(BaseModel):
@@ -175,7 +176,7 @@ async def get_combined_analysis(
     request: PredictionRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """🚀 AI 예측 + 가중치 기반 전략 통합 분석"""
+    """🚀 AI 예측 + 가중치 기반 전략 통합 분석 (현물/선물 지원)"""
     try:
         config = get_settings()
         binance = BinanceService(
@@ -183,9 +184,12 @@ async def get_combined_analysis(
             secret_key=config.binance_secret_key,
             testnet=config.binance_testnet
         )
+        
+        # market_type 정규화
+        market_type = request.market_type.lower() if request.market_type else 'spot'
 
-        # 현재가 조회
-        price_data = await binance.get_current_price(request.symbol)
+        # 현재가 조회 (마켓 타입에 따라 API 분기)
+        price_data = await binance.get_current_price(request.symbol, market_type=market_type)
         current_price = price_data.get("price", 0)
 
         # 데이터 수집 (cache_only 옵션에 따라 분기)
@@ -222,9 +226,10 @@ async def get_combined_analysis(
                     candles = await binance.get_klines(
                         symbol=request.symbol,
                         interval=request.timeframe,
-                        limit=300  # 지표 계산을 위해 충분한 데이터
+                        limit=300,  # 지표 계산을 위해 충분한 데이터
+                        market_type=market_type
                     )
-                    logger.info(f"📊 Retrieved {len(candles)} candles from Binance API")
+                    logger.info(f"📊 Retrieved {len(candles)} candles from Binance API ({market_type})")
         except Exception as e:
             print(f"❌ Error fetching klines: {e}")
             import traceback

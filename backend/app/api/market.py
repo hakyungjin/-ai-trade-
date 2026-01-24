@@ -52,13 +52,17 @@ async def get_all_tickers():
 
 
 @router.get("/ticker/{symbol}")
-async def get_ticker(symbol: str):
+async def get_ticker(symbol: str, market_type: str = Query(default="spot")):
     """
-    특정 심볼의 24시간 티커 데이터 조회
+    특정 심볼의 24시간 티커 데이터 조회 (현물/선물 지원)
+    
+    - **symbol**: 심볼 (예: BTCUSDT)
+    - **market_type**: 마켓 타입 (spot 또는 futures)
     """
     binance = get_binance_service()
+    market_type = market_type.lower()
     try:
-        tickers = await binance.get_ticker_24h(symbol.upper())
+        tickers = await binance.get_ticker_24h(symbol.upper(), market_type=market_type)
         if tickers:
             ticker = tickers[0]
             return {

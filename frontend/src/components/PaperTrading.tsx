@@ -77,6 +77,8 @@ export function PaperTrading() {
   // UI 상태
   const [activeTab, setActiveTab] = useState<'trade' | 'positions' | 'history'>('trade');
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [showTradeForm, setShowTradeForm] = useState(false);  // 선물 거래 폼 표시 여부
+  const [spotTradeType, setSpotTradeType] = useState<'buy' | 'sell' | null>(null);  // 현물 거래 타입
 
   // 모니터링 코인 로드
   useEffect(() => {
@@ -110,7 +112,7 @@ export function PaperTrading() {
   const fetchPrice = async () => {
     setLoading(true);
     try {
-      const response = await marketApi.getTicker(selectedSymbol);
+      const response = await marketApi.getTicker(selectedSymbol, marketType);
       const tickerData = response?.data?.data || response?.data;
       if (tickerData?.price !== undefined) {
         setCurrentPrice(tickerData.price);
@@ -127,7 +129,7 @@ export function PaperTrading() {
     fetchPrice();
     const interval = setInterval(fetchPrice, 5000);
     return () => clearInterval(interval);
-  }, [selectedSymbol]);
+  }, [selectedSymbol, marketType]);
 
   // 포지션 필터링
   const openPositions = (positions || []).filter((p) => p.status === 'OPEN');
@@ -343,7 +345,12 @@ export function PaperTrading() {
       <div className="flex gap-2">
         <Button
           variant={marketType === 'spot' ? 'default' : 'outline'}
-          onClick={() => setMarketType('spot')}
+          onClick={() => {
+            setMarketType('spot');
+            setShowTradeForm(false);
+            setSpotTradeType(null);
+            setQuantity('');
+          }}
           className={cn(
             'flex-1 sm:flex-none h-12',
             marketType === 'spot' && 'bg-blue-600 hover:bg-blue-700'
@@ -357,7 +364,12 @@ export function PaperTrading() {
         </Button>
         <Button
           variant={marketType === 'futures' ? 'default' : 'outline'}
-          onClick={() => setMarketType('futures')}
+          onClick={() => {
+            setMarketType('futures');
+            setShowTradeForm(false);
+            setSpotTradeType(null);
+            setQuantity('');
+          }}
           className={cn(
             'flex-1 sm:flex-none h-12',
             marketType === 'futures' && 'bg-orange-500 hover:bg-orange-600'
@@ -422,7 +434,7 @@ export function PaperTrading() {
           </Card>
 
           {/* 차트 */}
-          <PriceChart symbol={selectedSymbol} />
+          <PriceChart symbol={selectedSymbol} marketType={marketType} />
 
           {/* 현재 심볼 포지션 */}
           {currentSymbolPositions.length > 0 && (
@@ -516,192 +528,319 @@ export function PaperTrading() {
                 {marketType === 'futures' ? (
                   /* 선물 거래 */
                   <>
-                    {/* 롱/숏 선택 */}
-                    <div className="grid grid-cols-2 gap-2">
-                      <Button
-                        variant={positionType === 'LONG' ? 'default' : 'outline'}
-                        className={cn(
-                          'h-12',
-                          positionType === 'LONG' && 'bg-green-600 hover:bg-green-700'
-                        )}
-                        onClick={() => setPositionType('LONG')}
-                      >
-                        <TrendingUp className="w-5 h-5 mr-2" />
-                        롱 (매수)
-                      </Button>
-                      <Button
-                        variant={positionType === 'SHORT' ? 'default' : 'outline'}
-                        className={cn(
-                          'h-12',
-                          positionType === 'SHORT' && 'bg-red-600 hover:bg-red-700'
-                        )}
-                        onClick={() => setPositionType('SHORT')}
-                      >
-                        <TrendingDown className="w-5 h-5 mr-2" />
-                        숏 (매도)
-                      </Button>
-                    </div>
-
-                    {/* 레버리지 */}
-                    <div>
-                      <label className="text-sm font-medium mb-2 block">레버리지</label>
-                      <Select
-                        value={leverage.toString()}
-                        onValueChange={(v) => setLeverage(parseInt(v))}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {[1, 2, 3, 5, 10, 20, 50, 100].map((l) => (
-                            <SelectItem key={l} value={l.toString()}>
-                              {l}x
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    {/* 수량 */}
-                    <div>
-                      <label className="text-sm font-medium mb-2 block">수량</label>
-                      <Input
-                        type="number"
-                        placeholder="0.00"
-                        value={quantity}
-                        onChange={(e) => setQuantity(e.target.value)}
-                      />
-                      <div className="flex gap-1 mt-2">
-                        {[25, 50, 75, 100].map((p) => (
+                    {!showTradeForm ? (
+                      /* 롱/숏 버튼만 표시 */
+                      <div className="grid grid-cols-2 gap-3">
+                        <Button
+                          className="h-20 bg-green-600 hover:bg-green-700 text-white flex flex-col items-center justify-center gap-1"
+                          onClick={() => {
+                            setPositionType('LONG');
+                            setShowTradeForm(true);
+                          }}
+                        >
+                          <TrendingUp className="w-8 h-8" />
+                          <span className="text-lg font-bold">롱 (매수)</span>
+                        </Button>
+                        <Button
+                          className="h-20 bg-red-600 hover:bg-red-700 text-white flex flex-col items-center justify-center gap-1"
+                          onClick={() => {
+                            setPositionType('SHORT');
+                            setShowTradeForm(true);
+                          }}
+                        >
+                          <TrendingDown className="w-8 h-8" />
+                          <span className="text-lg font-bold">숏 (매도)</span>
+                        </Button>
+                      </div>
+                    ) : (
+                      /* 거래 폼 */
+                      <>
+                        {/* 롱/숏 선택 (변경 가능) */}
+                        <div className="flex items-center justify-between">
+                          <div className="grid grid-cols-2 gap-2 flex-1">
+                            <Button
+                              variant={positionType === 'LONG' ? 'default' : 'outline'}
+                              className={cn(
+                                'h-10',
+                                positionType === 'LONG' && 'bg-green-600 hover:bg-green-700'
+                              )}
+                              onClick={() => setPositionType('LONG')}
+                            >
+                              <TrendingUp className="w-4 h-4 mr-1" />
+                              롱
+                            </Button>
+                            <Button
+                              variant={positionType === 'SHORT' ? 'default' : 'outline'}
+                              className={cn(
+                                'h-10',
+                                positionType === 'SHORT' && 'bg-red-600 hover:bg-red-700'
+                              )}
+                              onClick={() => setPositionType('SHORT')}
+                            >
+                              <TrendingDown className="w-4 h-4 mr-1" />
+                              숏
+                            </Button>
+                          </div>
                           <Button
-                            key={p}
-                            variant="outline"
+                            variant="ghost"
                             size="sm"
-                            className="flex-1"
-                            onClick={() => setQuickQuantity(p)}
+                            className="ml-2"
+                            onClick={() => {
+                              setShowTradeForm(false);
+                              setQuantity('');
+                            }}
                           >
-                            {p}%
+                            <X className="w-4 h-4" />
                           </Button>
-                        ))}
-                      </div>
-                    </div>
+                        </div>
 
-                    {/* 주문 정보 */}
-                    <div className="p-3 bg-muted rounded-lg space-y-2 text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">예상 가격</span>
-                        <span className="font-mono">${currentPrice.toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">필요 마진</span>
-                        <span className="font-mono">${requiredAmount.toFixed(2)}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">레버리지</span>
-                        <span className="font-mono">{leverage}x</span>
-                      </div>
-                    </div>
+                        {/* 레버리지 */}
+                        <div>
+                          <label className="text-sm font-medium mb-2 block">레버리지</label>
+                          <Select
+                            value={leverage.toString()}
+                            onValueChange={(v) => setLeverage(parseInt(v))}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {[1, 2, 3, 5, 10, 20, 50, 100].map((l) => (
+                                <SelectItem key={l} value={l.toString()}>
+                                  {l}x
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
 
-                    {/* 주문 버튼 */}
-                    <Button
-                      className={cn(
-                        'w-full h-12 text-lg font-bold',
-                        positionType === 'LONG' 
-                          ? 'bg-green-600 hover:bg-green-700' 
-                          : 'bg-red-600 hover:bg-red-700'
-                      )}
-                      disabled={!quantity || parseFloat(quantity) <= 0 || requiredAmount > balance}
-                      onClick={handleOpenFuturesPosition}
-                    >
-                      {positionType === 'LONG' ? '롱 진입' : '숏 진입'}
-                    </Button>
+                        {/* 수량 */}
+                        <div>
+                          <label className="text-sm font-medium mb-2 block">수량</label>
+                          <Input
+                            type="number"
+                            placeholder="0.00"
+                            value={quantity}
+                            onChange={(e) => setQuantity(e.target.value)}
+                          />
+                          <div className="flex gap-1 mt-2">
+                            {[25, 50, 75, 100].map((p) => (
+                              <Button
+                                key={p}
+                                variant="outline"
+                                size="sm"
+                                className="flex-1"
+                                onClick={() => setQuickQuantity(p)}
+                              >
+                                {p}%
+                              </Button>
+                            ))}
+                          </div>
+                        </div>
 
-                    {requiredAmount > balance && (
-                      <p className="text-sm text-red-500 text-center">
-                        잔고가 부족합니다
-                      </p>
+                        {/* 주문 정보 */}
+                        <div className="p-3 bg-muted rounded-lg space-y-2 text-sm">
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">예상 가격</span>
+                            <span className="font-mono">${currentPrice.toLocaleString()}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">필요 마진</span>
+                            <span className="font-mono">${requiredAmount.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">레버리지</span>
+                            <span className="font-mono">{leverage}x</span>
+                          </div>
+                        </div>
+
+                        {/* 주문 버튼 */}
+                        <Button
+                          className={cn(
+                            'w-full h-12 text-lg font-bold',
+                            positionType === 'LONG' 
+                              ? 'bg-green-600 hover:bg-green-700' 
+                              : 'bg-red-600 hover:bg-red-700'
+                          )}
+                          disabled={!quantity || parseFloat(quantity) <= 0 || requiredAmount > balance}
+                          onClick={() => {
+                            handleOpenFuturesPosition();
+                            setShowTradeForm(false);
+                            setQuantity('');
+                          }}
+                        >
+                          {positionType === 'LONG' ? '롱 진입' : '숏 진입'}
+                        </Button>
+
+                        {requiredAmount > balance && (
+                          <p className="text-sm text-red-500 text-center">
+                            잔고가 부족합니다
+                          </p>
+                        )}
+                      </>
                     )}
                   </>
                 ) : (
                   /* 현물 거래 */
                   <>
-                    {/* 매수 섹션 */}
-                    <div className="space-y-3 p-3 bg-green-500/5 rounded-lg border border-green-500/20">
-                      <div className="flex items-center gap-2 text-green-600 font-semibold">
-                        <TrendingUp className="w-4 h-4" />
-                        매수
+                    {spotTradeType === null ? (
+                      /* 매수/매도 버튼만 표시 */
+                      <div className="grid grid-cols-2 gap-3">
+                        <Button
+                          className="h-20 bg-green-600 hover:bg-green-700 text-white flex flex-col items-center justify-center gap-1"
+                          onClick={() => setSpotTradeType('buy')}
+                        >
+                          <TrendingUp className="w-8 h-8" />
+                          <span className="text-lg font-bold">매수</span>
+                        </Button>
+                        <Button
+                          className="h-20 bg-red-600 hover:bg-red-700 text-white flex flex-col items-center justify-center gap-1"
+                          onClick={() => setSpotTradeType('sell')}
+                          disabled={availableToSell <= 0}
+                        >
+                          <TrendingDown className="w-8 h-8" />
+                          <span className="text-lg font-bold">매도</span>
+                          {availableToSell > 0 && (
+                            <span className="text-xs opacity-80">보유: {availableToSell.toFixed(4)}</span>
+                          )}
+                        </Button>
                       </div>
-                      <Input
-                        type="number"
-                        placeholder="매수 수량"
-                        value={quantity}
-                        onChange={(e) => setQuantity(e.target.value)}
-                      />
-                      <div className="flex gap-1">
-                        {[25, 50, 75, 100].map((p) => (
+                    ) : spotTradeType === 'buy' ? (
+                      /* 매수 폼 */
+                      <div className="space-y-3 p-3 bg-green-500/5 rounded-lg border border-green-500/20">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 text-green-600 font-semibold">
+                            <TrendingUp className="w-4 h-4" />
+                            매수
+                          </div>
                           <Button
-                            key={p}
-                            variant="outline"
+                            variant="ghost"
                             size="sm"
-                            className="flex-1"
-                            onClick={() => setQuickQuantity(p)}
+                            onClick={() => {
+                              setSpotTradeType(null);
+                              setQuantity('');
+                            }}
                           >
-                            {p}%
+                            <X className="w-4 h-4" />
                           </Button>
-                        ))}
+                        </div>
+                        <Input
+                          type="number"
+                          placeholder="매수 수량"
+                          value={quantity}
+                          onChange={(e) => setQuantity(e.target.value)}
+                        />
+                        <div className="flex gap-1">
+                          {[25, 50, 75, 100].map((p) => (
+                            <Button
+                              key={p}
+                              variant="outline"
+                              size="sm"
+                              className="flex-1"
+                              onClick={() => setQuickQuantity(p)}
+                            >
+                              {p}%
+                            </Button>
+                          ))}
+                        </div>
+                        <div className="p-2 bg-muted rounded text-sm space-y-1">
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">예상 가격</span>
+                            <span className="font-mono">${currentPrice.toLocaleString()}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">예상 금액</span>
+                            <span className="font-mono">${requiredAmount.toFixed(2)}</span>
+                          </div>
+                        </div>
+                        <Button
+                          className="w-full h-12 text-lg font-bold bg-green-600 hover:bg-green-700"
+                          disabled={!quantity || parseFloat(quantity) <= 0 || requiredAmount > balance}
+                          onClick={() => {
+                            handleBuySpot();
+                            setSpotTradeType(null);
+                            setQuantity('');
+                          }}
+                        >
+                          매수
+                        </Button>
+                        {requiredAmount > balance && (
+                          <p className="text-sm text-red-500 text-center">
+                            잔고가 부족합니다
+                          </p>
+                        )}
                       </div>
-                      <div className="text-sm text-muted-foreground">
-                        예상 금액: ${requiredAmount.toFixed(2)}
-                      </div>
-                      <Button
-                        className="w-full bg-green-600 hover:bg-green-700"
-                        disabled={!quantity || parseFloat(quantity) <= 0 || requiredAmount > balance}
-                        onClick={handleBuySpot}
-                      >
-                        매수
-                      </Button>
-                    </div>
-
-                    {/* 매도 섹션 */}
-                    <div className="space-y-3 p-3 bg-red-500/5 rounded-lg border border-red-500/20">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2 text-red-600 font-semibold">
-                          <TrendingDown className="w-4 h-4" />
+                    ) : (
+                      /* 매도 폼 */
+                      <div className="space-y-3 p-3 bg-red-500/5 rounded-lg border border-red-500/20">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 text-red-600 font-semibold">
+                            <TrendingDown className="w-4 h-4" />
+                            매도
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm text-muted-foreground">
+                              보유: {availableToSell.toFixed(6)}
+                            </span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                setSpotTradeType(null);
+                                setQuantity('');
+                              }}
+                            >
+                              <X className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </div>
+                        <Input
+                          type="number"
+                          placeholder="매도 수량"
+                          value={quantity}
+                          onChange={(e) => setQuantity(e.target.value)}
+                        />
+                        <div className="flex gap-1">
+                          {[25, 50, 75, 100].map((p) => (
+                            <Button
+                              key={p}
+                              variant="outline"
+                              size="sm"
+                              className="flex-1"
+                              onClick={() => setQuickSellQuantity(p)}
+                            >
+                              {p}%
+                            </Button>
+                          ))}
+                        </div>
+                        <div className="p-2 bg-muted rounded text-sm space-y-1">
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">예상 가격</span>
+                            <span className="font-mono">${currentPrice.toLocaleString()}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">예상 수익</span>
+                            <span className="font-mono">${(parseFloat(quantity || '0') * currentPrice).toFixed(2)}</span>
+                          </div>
+                        </div>
+                        <Button
+                          className="w-full h-12 text-lg font-bold bg-red-600 hover:bg-red-700"
+                          disabled={!quantity || parseFloat(quantity) <= 0 || parseFloat(quantity) > availableToSell}
+                          onClick={() => {
+                            handleSellSpot();
+                            setSpotTradeType(null);
+                            setQuantity('');
+                          }}
+                        >
                           매도
-                        </div>
-                        <div className="text-sm text-muted-foreground">
-                          보유: {availableToSell.toFixed(6)}
-                        </div>
+                        </Button>
+                        {parseFloat(quantity || '0') > availableToSell && (
+                          <p className="text-sm text-red-500 text-center">
+                            보유 수량을 초과합니다
+                          </p>
+                        )}
                       </div>
-                      <Input
-                        type="number"
-                        placeholder="매도 수량"
-                        value={quantity}
-                        onChange={(e) => setQuantity(e.target.value)}
-                        disabled={availableToSell <= 0}
-                      />
-                      <div className="flex gap-1">
-                        {[25, 50, 75, 100].map((p) => (
-                          <Button
-                            key={p}
-                            variant="outline"
-                            size="sm"
-                            className="flex-1"
-                            onClick={() => setQuickSellQuantity(p)}
-                            disabled={availableToSell <= 0}
-                          >
-                            {p}%
-                          </Button>
-                        ))}
-                      </div>
-                      <Button
-                        className="w-full bg-red-600 hover:bg-red-700"
-                        disabled={!quantity || parseFloat(quantity) <= 0 || parseFloat(quantity) > availableToSell}
-                        onClick={handleSellSpot}
-                      >
-                        매도
-                      </Button>
-                    </div>
+                    )}
                   </>
                 )}
               </TabsContent>

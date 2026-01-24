@@ -1,9 +1,13 @@
 from binance.client import Client
 from binance.enums import *
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 import asyncio
 from functools import partial
 from datetime import datetime
+
+
+# 마켓 타입 정의
+MarketType = Literal['spot', 'futures']
 
 
 class BinanceService:
@@ -27,9 +31,12 @@ class BinanceService:
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, partial(func, *args, **kwargs))
 
-    async def get_current_price(self, symbol: str) -> Dict[str, Any]:
-        """현재가 조회"""
-        ticker = await self._run_sync(self.client.get_symbol_ticker, symbol=symbol)
+    async def get_current_price(self, symbol: str, market_type: MarketType = 'spot') -> Dict[str, Any]:
+        """현재가 조회 (현물/선물 지원)"""
+        if market_type == 'futures':
+            ticker = await self._run_sync(self.market_client.futures_symbol_ticker, symbol=symbol)
+        else:
+            ticker = await self._run_sync(self.client.get_symbol_ticker, symbol=symbol)
         return {
             "symbol": ticker["symbol"],
             "price": float(ticker["price"])
@@ -155,10 +162,11 @@ class BinanceService:
         interval: str = "1h",
         limit: int = 100,
         startTime: Optional[int] = None,
-        endTime: Optional[int] = None
+        endTime: Optional[int] = None,
+        market_type: MarketType = 'spot'
     ) -> List[Dict[str, Any]]:
         """
-        캔들 데이터 조회 (실제 바이낸스 API 사용)
+        캔들 데이터 조회 (현물/선물 지원)
         
         Args:
             symbol: 거래쌍 (예: BTCUSDT)
@@ -166,6 +174,7 @@ class BinanceService:
             limit: 조회할 캔들 개수 (최대 1000)
             startTime: 시작 시간 (밀리초, optional)
             endTime: 종료 시간 (밀리초, optional)
+            market_type: 마켓 타입 ('spot' 또는 'futures')
         """
         interval_map = {
             "1m": KLINE_INTERVAL_1MINUTE,
@@ -196,11 +205,17 @@ class BinanceService:
         if endTime:
             kwargs["endTime"] = endTime
         
-        # 마켓 데이터는 실제 바이낸스 API 사용
-        klines = await self._run_sync(
-            self.market_client.get_klines,
-            **kwargs
-        )
+        # 마켓 타입에 따라 API 분기
+        if market_type == 'futures':
+            klines = await self._run_sync(
+                self.market_client.futures_klines,
+                **kwargs
+            )
+        else:
+            klines = await self._run_sync(
+                self.market_client.get_klines,
+                **kwargs
+            )
 
         return [
             {
@@ -258,13 +273,20 @@ class BinanceService:
             for t in trades
         ]
 
-    async def get_ticker_24h(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-        """24시간 티커 데이터 조회 (실제 바이낸스 API 사용)"""
-        if symbol:
-            ticker = await self._run_sync(self.market_client.get_ticker, symbol=symbol)
-            tickers = [ticker]
+    async def get_ticker_24h(self, symbol: Optional[str] = None, market_type: MarketType = 'spot') -> List[Dict[str, Any]]:
+        """24시간 티커 데이터 조회 (현물/선물 지원)"""
+        if market_type == 'futures':
+            if symbol:
+                ticker = await self._run_sync(self.market_client.futures_ticker, symbol=symbol)
+                tickers = [ticker]
+            else:
+                tickers = await self._run_sync(self.market_client.futures_ticker)
         else:
-            tickers = await self._run_sync(self.market_client.get_ticker)
+            if symbol:
+                ticker = await self._run_sync(self.market_client.get_ticker, symbol=symbol)
+                tickers = [ticker]
+            else:
+                tickers = await self._run_sync(self.market_client.get_ticker)
 
         return [
             {
@@ -277,9 +299,9 @@ class BinanceService:
                 "volume": float(t["volume"]),
                 "quoteVolume": float(t["quoteVolume"]),
                 "openPrice": float(t["openPrice"]),
-                "prevClosePrice": float(t["prevClosePrice"]),
-                "bidPrice": float(t["bidPrice"]),
-                "askPrice": float(t["askPrice"]),
+                "prevClosePrice": float(t.get("prevClosePrice", t.get("openPrice", 0))),  # 선물은 prevClosePrice 없을 수 있음
+                "bidPrice": float(t.get("bidPrice", 0)),  # 선물은 bidPrice 없을 수 있음
+                "askPrice": float(t.get("askPrice", 0)),  # 선물은 askPrice 없을 수 있음
                 "weightedAvgPrice": float(t["weightedAvgPrice"]),
                 "openTime": t["openTime"],
                 "closeTime": t["closeTime"],

@@ -27,6 +27,7 @@ interface Candle {
 
 interface PriceChartProps {
   symbol: string;
+  marketType?: 'spot' | 'futures';
   onSymbolChange?: (symbol: string) => void;
 }
 
@@ -39,7 +40,7 @@ const INTERVALS = [
   { value: '1d', label: '1일' },
 ];
 
-export function PriceChart({ symbol }: PriceChartProps) {
+export function PriceChart({ symbol, marketType = 'spot' }: PriceChartProps) {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [selectedInterval, setSelectedInterval] = useState('1m');
   const [currentPrice, setCurrentPrice] = useState(0);
@@ -91,7 +92,7 @@ export function PriceChart({ symbol }: PriceChartProps) {
         reconnectTimeoutRef.current = null;
       }
     };
-  }, [symbol, selectedInterval]);
+  }, [symbol, selectedInterval, marketType]);
 
   const loadInitialData = async () => {
     try {
@@ -125,7 +126,7 @@ export function PriceChart({ symbol }: PriceChartProps) {
 
     try {
       const wsUrl = getWebSocketUrl();
-      const socket = new WebSocket(`${wsUrl}/api/chart/ws/realtime/${symbol}?interval=${selectedInterval}`);
+      const socket = new WebSocket(`${wsUrl}/api/chart/ws/realtime/${symbol}?interval=${selectedInterval}&market_type=${marketType}`);
 
       socket.onopen = () => {
         console.log(`Chart WebSocket connected: ${symbol} ${selectedInterval}`);
@@ -246,7 +247,7 @@ export function PriceChart({ symbol }: PriceChartProps) {
         setIsConnected(false);
       }
     }
-  }, [symbol, selectedInterval]);
+  }, [symbol, selectedInterval, marketType]);
 
   const formatPrice = (price: number) => {
     if (price >= 1000) return price.toLocaleString('en-US', { maximumFractionDigits: 2 });

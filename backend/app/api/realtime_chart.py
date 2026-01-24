@@ -76,28 +76,31 @@ manager = RealtimeConnectionManager()
 
 
 @router.websocket("/ws/realtime/{symbol}")
-async def websocket_realtime_chart(websocket: WebSocket, symbol: str, interval: str = "1m"):
+async def websocket_realtime_chart(websocket: WebSocket, symbol: str, interval: str = "1m", market_type: str = "spot"):
     """
     🚀 실시간 차트 WebSocket (Binance 직접 연결)
     
     - Binance 스트림을 직접 구독하여 지연시간 최소화
     - 초기 과거 데이터 로드 후 실시간 업데이트
     - 다중 클라이언트 지원
+    - 현물/선물 마켓 지원
     
     Parameters:
     - symbol: 거래쌍 (BTCUSDT, ETHUSDT)
     - interval: 캔들 간격 (1m, 5m, 15m, 1h, 4h, 1d)
+    - market_type: 마켓 타입 (spot, futures)
     """
     
     symbol = symbol.upper()
-    stream_id = f"{symbol}_{interval}"
+    market_type = market_type.lower()  # 'spot' 또는 'futures'
+    stream_id = f"{symbol}_{interval}_{market_type}"
     client_id = f"{websocket.client.host}:{websocket.client.port}"
     
     try:
         # 클라이언트 연결 등록
         await manager.connect(client_id, stream_id, websocket)
         
-        logger.info(f"🔌 Real-time chart opened: {client_id} - {symbol} {interval}")
+        logger.info(f"🔌 Real-time chart opened: {client_id} - {symbol} {interval} ({market_type})")
         
         # 초기 데이터 로드 (REST API)
         binance = BinanceService(
@@ -107,11 +110,12 @@ async def websocket_realtime_chart(websocket: WebSocket, symbol: str, interval: 
         )
         
         try:
-            logger.info(f"📊 Loading initial klines: {symbol} {interval}")
+            logger.info(f"📊 Loading initial klines: {symbol} {interval} ({market_type})")
             initial_klines = await binance.get_klines(
                 symbol=symbol, 
                 interval=interval, 
-                limit=200
+                limit=200,
+                market_type=market_type
             )
             
             # 초기 데이터 전송
