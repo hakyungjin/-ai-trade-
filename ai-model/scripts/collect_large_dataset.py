@@ -49,7 +49,8 @@ async def collect_historical_batch(
     symbol: str,
     timeframe: str,
     end_time: datetime,
-    limit: int = 1000
+    limit: int = 1000,
+    market_type: str = "spot"
 ) -> int:
     """특정 시점 이전 데이터 배치 수집"""
     try:
@@ -61,7 +62,8 @@ async def collect_historical_batch(
             symbol=symbol,
             interval=timeframe,
             limit=limit,
-            endTime=end_ms
+            endTime=end_ms,
+            market_type=market_type
         )
         
         if not klines:
@@ -122,13 +124,15 @@ async def collect_large_dataset(
     symbol: str,
     timeframe: str,
     target_count: int = 50000,
-    batch_size: int = 1000
+    batch_size: int = 1000,
+    market_type: str = "spot"
 ):
     """대량 데이터 수집 메인 함수"""
     
     print("=" * 60)
     print(f"  Large Dataset Collection")
     print(f"  Symbol: {symbol}, Timeframe: {timeframe}")
+    print(f"  Market: {market_type.upper()}")
     print(f"  Target: {target_count:,} candles")
     print("=" * 60)
     
@@ -201,7 +205,8 @@ async def collect_large_dataset(
                 symbol=symbol,
                 timeframe=timeframe,
                 end_time=end_time,
-                limit=batch_size
+                limit=batch_size,
+                market_type=market_type
             )
             
             if saved == 0:
@@ -230,6 +235,7 @@ async def main():
     parser.add_argument("--timeframe", type=str, default="1m", help="Candle timeframe (1m, 5m, 15m, 1h, etc)")
     parser.add_argument("--target", type=int, default=50000, help="Target number of candles to collect")
     parser.add_argument("--batch", type=int, default=1000, help="Batch size per API call (max 1000)")
+    parser.add_argument("--market", type=str, default="spot", choices=["spot", "futures"], help="Market type")
     
     args = parser.parse_args()
     
@@ -237,7 +243,8 @@ async def main():
         symbol=args.symbol,
         timeframe=args.timeframe,
         target_count=args.target,
-        batch_size=min(args.batch, 1000)
+        batch_size=min(args.batch, 1000),
+        market_type=args.market
     )
 
 

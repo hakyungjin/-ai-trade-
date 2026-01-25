@@ -95,7 +95,13 @@ export function PriceChart({ symbol, marketType = 'spot' }: PriceChartProps) {
           setCandles(response.data.data);
           if (response.data.data.length > 0) {
             const latest = response.data.data[response.data.data.length - 1];
+            const first = response.data.data[0];
             setCurrentPrice(latest.close);
+            // 변동률 계산 (첫 캔들 대비)
+            if (first.open > 0) {
+              const change = ((latest.close - first.open) / first.open) * 100;
+              setPriceChange(change);
+            }
           }
         }
       } catch (error) {
@@ -136,7 +142,13 @@ export function PriceChart({ symbol, marketType = 'spot' }: PriceChartProps) {
               
               if (data.data.length > 0) {
                 const latest = data.data[data.data.length - 1];
+                const first = data.data[0];
                 setCurrentPrice(latest.close);
+                // 변동률 계산 (첫 캔들 대비)
+                if (first.open > 0) {
+                  const change = ((latest.close - first.open) / first.open) * 100;
+                  setPriceChange(change);
+                }
               }
               setIsLoading(false);
             } else if (data.type === 'update') {
@@ -156,6 +168,13 @@ export function PriceChart({ symbol, marketType = 'spot' }: PriceChartProps) {
                       newCandles.shift();
                     }
                   }
+                  
+                  // 변동률 업데이트 (첫 캔들 대비)
+                  if (newCandles.length > 0 && newCandles[0].open > 0) {
+                    const change = ((data.latestCandle.close - newCandles[0].open) / newCandles[0].open) * 100;
+                    setPriceChange(change);
+                  }
+                  
                   return newCandles;
                 });
               }

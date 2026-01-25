@@ -36,20 +36,59 @@ def load_dataset(filename: str) -> pd.DataFrame:
 def prepare_features_and_labels(df: pd.DataFrame):
     """피처와 레이블 분리"""
     
-    # 학습에 사용할 피처 컬럼
+    # 학습에 사용할 피처 컬럼 (확장 버전)
     feature_columns = [
-        # 기술적 지표
+        # === 기술적 지표 ===
         'rsi_14', 'macd', 'macd_signal', 'macd_histogram',
         'bb_position', 'stoch_k', 'stoch_d', 'atr_14', 'adx',
         
-        # 가격 변화
-        'price_change_1', 'price_change_5', 'price_change_10',
+        # === 가격 변화 ===
+        'price_change_1', 'price_change_5', 'price_change_10', 'price_change_20',
         
-        # 거래량
-        'volume_change_1', 'volume_ma_ratio',
+        # === 거래량 (알트코인 강화) ===
+        'volume_change_1', 'volume_change_5', 'volume_change_10',
+        'volume_ma_ratio', 'volume_ma_ratio_5', 'volume_ma_ratio_10',
+        'volume_spike', 'volume_spike_3x', 'volume_spike_5x',
+        'volume_surge_intensity', 'volume_price_trend', 'volume_price_correlation',
+        'volume_momentum_5', 'volume_momentum_10',
+        'volume_breakout', 'volume_up_signal', 'volume_down_signal', 'volume_trend',
         
-        # 추가 피처
-        'ema_cross', 'rsi_normalized', 'macd_normalized', 'price_position'
+        # === OBV (스마트머니 추적) ===
+        'obv_slope', 'obv_divergence',
+        
+        # === MFI (거래량 가중 RSI) ===
+        'mfi_normalized', 'mfi_overbought', 'mfi_oversold',
+        
+        # === Williams %R ===
+        'williams_r', 'williams_overbought', 'williams_oversold',
+        
+        # === ATR 비율 (변동성 정규화) ===
+        'atr_ratio',
+        
+        # === 캔들 패턴 ===
+        'pattern_doji', 'pattern_hammer', 'pattern_inverted_hammer',
+        'pattern_bullish_engulfing', 'pattern_bearish_engulfing', 'pattern_shooting_star',
+        
+        # === 복합 신호 ===
+        'strong_buy_signal', 'strong_sell_signal',
+        
+        # === 기존 피처 ===
+        'ema_cross', 'rsi_normalized', 'macd_normalized', 'price_position',
+        
+        # === 연속 패턴 ===
+        'streak_bullish', 'streak_bearish', 'consecutive_up', 'consecutive_down',
+        
+        # === 모멘텀 ===
+        'bullish_momentum', 'bearish_momentum', 'cumulative_change_5',
+        
+        # === 펌프 앤 덤프 패턴 (알트코인 핵심!) ===
+        'pump_3', 'pump_6', 'pump_12',                      # 급등 감지
+        'drawdown_from_high_12', 'drawdown_from_high_24',   # 고점 대비 하락
+        'pump_then_dump', 'dump_then_pump',                 # 패턴 신호
+        'overheated', 'oversold_bounce',                    # 과열/과매도
+        'volatility_spike',                                 # 변동성 급증
+        'near_high', 'near_low',                            # 고점/저점 근처
+        'pump_strength', 'dump_strength'                    # 강도 지표
     ]
     
     # 존재하는 컬럼만 선택
@@ -108,29 +147,52 @@ def train_xgboost(X_train, y_train, X_test, y_test, use_class_weight=True):
         sample_weights = np.array([class_weights[y] for y in y_train_adjusted])
         
         print(f"[INFO] Class weights applied:")
-        all_label_names = {-2: 'STRONG_SELL', -1: 'SELL', 0: 'HOLD', 1: 'BUY', 2: 'STRONG_BUY'}
+        # 2클래스: 0=SELL, 1=BUY / 3클래스: -1=SELL, 0=HOLD, 1=BUY
+        if num_classes == 2:
+            all_label_names = {0: 'SELL ⬇️', 1: 'BUY ⬆️'}
+        else:
+            all_label_names = {-2: 'STRONG_SELL', -1: 'SELL', 0: 'HOLD', 1: 'BUY', 2: 'STRONG_BUY'}
         for cls, weight in sorted(class_weights.items()):
             orig_label = idx_to_label[cls]
             name = all_label_names.get(orig_label, f'CLASS_{cls}')
             count = class_counts[cls]
             print(f"   {name}: {weight:.2f}x (count: {count})")
     
-    model = xgb.XGBClassifier(
-        n_estimators=200,       # 더 많은 트리
-        max_depth=8,            # 더 깊은 트리
-        learning_rate=0.05,     # 더 낮은 학습률
-        objective='multi:softmax',
-        num_class=num_classes,
-        eval_metric='mlogloss',
-        use_label_encoder=False,
-        random_state=42,
-        n_jobs=-1,
-        min_child_weight=3,     # 과적합 방지
-        subsample=0.8,          # 행 샘플링
-        colsample_bytree=0.8,   # 피처 샘플링
-        reg_alpha=0.1,          # L1 정규화
-        reg_lambda=1.0          # L2 정규화
-    )
+    # 2클래스는 binary, 다클래스는 multi:softmax
+    if num_classes == 2:
+        model = xgb.XGBClassifier(
+            n_estimators=300,       # 더 많은 트리
+            max_depth=6,            # 적당한 깊이 (과적합 방지)
+            learning_rate=0.03,     # 낮은 학습률
+            objective='binary:logistic',  # 2클래스!
+            eval_metric='logloss',
+            use_label_encoder=False,
+            random_state=42,
+            n_jobs=-1,
+            min_child_weight=5,     # 과적합 방지
+            subsample=0.8,          # 행 샘플링
+            colsample_bytree=0.7,   # 피처 샘플링
+            reg_alpha=0.3,          # L1 정규화 강화
+            reg_lambda=2.0,         # L2 정규화 강화
+            scale_pos_weight=1.0    # 클래스 균형
+        )
+    else:
+        model = xgb.XGBClassifier(
+            n_estimators=200,       # 더 많은 트리
+            max_depth=8,            # 더 깊은 트리
+            learning_rate=0.05,     # 더 낮은 학습률
+            objective='multi:softmax',
+            num_class=num_classes,
+            eval_metric='mlogloss',
+            use_label_encoder=False,
+            random_state=42,
+            n_jobs=-1,
+            min_child_weight=3,     # 과적합 방지
+            subsample=0.8,          # 행 샘플링
+            colsample_bytree=0.8,   # 피처 샘플링
+            reg_alpha=0.1,          # L1 정규화
+            reg_lambda=1.0          # L2 정규화
+        )
     
     print("\n[TRAIN] Training XGBoost model (with class weights)...")
     model.fit(

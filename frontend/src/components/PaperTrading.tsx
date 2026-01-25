@@ -13,6 +13,9 @@ import {
   RotateCcw,
   Coins,
   LineChart,
+  Plus,
+  Search,
+  Loader,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -34,6 +37,7 @@ import type { MarketType, PositionType, PaperPosition } from '@/store/paperTradi
 import { PriceChart } from './market';
 
 interface CoinData {
+  id: number;
   symbol: string;
   market_type: 'spot' | 'futures';
 }
@@ -84,25 +88,116 @@ export function PaperTrading() {
   const [showTradeForm, setShowTradeForm] = useState(false);  // 선물 거래 폼 표시 여부
   const [spotTradeType, setSpotTradeType] = useState<'buy' | 'sell' | null>(null);  // 현물 거래 타입
 
+  // 코인 추가 모달 상태
+  const [monitoredCoins, setMonitoredCoins] = useState<CoinData[]>([]);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [searchSymbol, setSearchSymbol] = useState('');
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [addLoading, setAddLoading] = useState(false);
+
   // 모니터링 코인 로드
+  const loadMonitoredCoins = async () => {
+    try {
+      const response = await apiClient.get('/v1/coins/monitoring');
+      const coinsData = response.data.coins || response.data.data || [];
+      setMonitoredCoins(coinsData);
+      
+      // 심볼 목록 업데이트 (마켓 타입별 분리)
+      const spotCoins = coinsData.filter((c: CoinData) => c.market_type === 'spot').map((c: CoinData) => c.symbol);
+      const futuresCoins = coinsData.filter((c: CoinData) => c.market_type === 'futures').map((c: CoinData) => c.symbol);
+      
+      setSpotSymbols([...new Set([...defaultSpotSymbols, ...spotCoins])]);
+      setFuturesSymbols([...new Set([...defaultFuturesSymbols, ...futuresCoins])]);
+    } catch (error) {
+      console.error('Failed to load monitored coins:', error);
+    }
+  };
+
   useEffect(() => {
-    const loadMonitoredCoins = async () => {
-      try {
-        const response = await apiClient.get('/v1/coins/monitoring');
-        const coinsData = response.data.coins || response.data.data || [];
-        
-        // 심볼 목록 업데이트 (마켓 타입별 분리)
-        const spotCoins = coinsData.filter((c: CoinData) => c.market_type === 'spot').map((c: CoinData) => c.symbol);
-        const futuresCoins = coinsData.filter((c: CoinData) => c.market_type === 'futures').map((c: CoinData) => c.symbol);
-        
-        setSpotSymbols([...new Set([...defaultSpotSymbols, ...spotCoins])]);
-        setFuturesSymbols([...new Set([...defaultFuturesSymbols, ...futuresCoins])]);
-      } catch (error) {
-        console.error('Failed to load monitored coins:', error);
-      }
-    };
     loadMonitoredCoins();
   }, []);
+
+  // 심볼 검색
+  const searchSymbols = async (query: string) => {
+    if (!query.trim()) {
+      setSearchResults([]);
+      return;
+    }
+    
+    setSearchLoading(true);
+    try {
+      const endpoint = marketType === 'futures' 
+        ? `/v1/coins/search/futures?query=${query}&limit=20`
+        : `/v1/coins/search/spot?query=${query}&limit=20`;
+      
+      const response = await apiClient.get(endpoint);
+      if (response.data.success) {
+        setSearchResults(response.data.symbols || []);
+      }
+    } catch (error) {
+      console.error('심볼 검색 실패:', error);
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (showAddModal && searchSymbol) {
+        searchSymbols(searchSymbol);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchSymbol, showAddModal, marketType]);
+
+  // 코인 추가
+  const handleAddCoin = async (symbol: string) => {
+    setAddLoading(true);
+    try {
+      await apiClient.post(`/v1/coins/add-monitoring/${symbol}?market_type=${marketType}`);
+      setShowAddModal(false);
+      setSearchSymbol('');
+      setSearchResults([]);
+      await loadMonitoredCoins();
+      setSelectedSymbol(symbol);
+    } catch (error) {
+      console.error('코인 추가 실패:', error);
+    } finally {
+      setAddLoading(false);
+    }
+  };
+
+  // 코인 삭제
+  const handleDeleteCoin = async (coinId: number, symbol: string) => {
+    try {
+      await apiClient.delete(`/v1/coins/monitoring/${coinId}`);
+      await loadMonitoredCoins();
+      
+      // 삭제된 코인이 선택된 코인이면 첫 번째 코인으로 변경
+      if (selectedSymbol === symbol) {
+        const currentList = marketType === 'spot' ? spotSymbols : futuresSymbols;
+        const remaining = currentList.filter(s => s !== symbol);
+        if (remaining.length > 0) {
+          setSelectedSymbol(remaining[0]);
+        }
+      }
+    } catch (error) {
+      console.error('코인 삭제 실패:', error);
+    }
+  };
+
+  // 모니터링 코인 정보 가져오기
+  const getMonitoredCoin = (symbol: string) => {
+    return monitoredCoins.find(c => c.symbol === symbol && c.market_type === marketType);
+  };
+
+  // 기본 코인 여부 확인
+  const isDefaultSymbol = (symbol: string) => {
+    return marketType === 'spot' 
+      ? defaultSpotSymbols.includes(symbol)
+      : defaultFuturesSymbols.includes(symbol);
+  };
 
   // 마켓 타입 변경 시 심볼 초기화
   useEffect(() => {
@@ -402,21 +497,64 @@ export function PaperTrading() {
       {/* 심볼 선택 */}
       <Card>
         <CardContent className="p-4">
-          <div className="flex flex-wrap gap-2">
-            {currentSymbols.map((symbol) => (
-              <Button
-                key={symbol}
-                variant={selectedSymbol === symbol ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setSelectedSymbol(symbol)}
-                className={cn(
-                  'min-w-[80px]',
-                  selectedSymbol === symbol && (marketType === 'spot' ? 'bg-blue-600' : 'bg-orange-500')
-                )}
-              >
-                {symbol.replace('USDT', '')}
-              </Button>
-            ))}
+          <div className="flex flex-wrap gap-2 items-center">
+            {currentSymbols.map((symbol) => {
+              const monitoredCoin = getMonitoredCoin(symbol);
+              const isDefault = isDefaultSymbol(symbol);
+              
+              return (
+                <div
+                  key={symbol}
+                  className={cn(
+                    'flex items-center gap-1 rounded-lg border transition-colors',
+                    selectedSymbol === symbol 
+                      ? marketType === 'spot'
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-orange-500 text-white border-orange-500'
+                      : 'bg-background hover:bg-accent border-border'
+                  )}
+                >
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSelectedSymbol(symbol)}
+                    className={cn(
+                      'min-w-[70px] h-9',
+                      selectedSymbol === symbol && 'text-white hover:bg-transparent hover:text-white'
+                    )}
+                  >
+                    {symbol.replace('USDT', '')}
+                  </Button>
+                  {monitoredCoin && !isDefault && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={cn(
+                        'h-7 w-7 mr-1',
+                        selectedSymbol === symbol 
+                          ? 'hover:bg-white/20 text-white' 
+                          : 'hover:bg-red-100 text-red-600'
+                      )}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteCoin(monitoredCoin.id, symbol);
+                      }}
+                    >
+                      <X className="w-3 h-3" />
+                    </Button>
+                  )}
+                </div>
+              );
+            })}
+            <Button
+              onClick={() => setShowAddModal(true)}
+              variant="outline"
+              size="sm"
+              className="h-9"
+            >
+              <Plus className="w-4 h-4 mr-1" />
+              추가
+            </Button>
           </div>
         </CardContent>
       </Card>
@@ -1004,6 +1142,91 @@ export function PaperTrading() {
                   리셋
                 </Button>
               </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* 코인 추가 모달 */}
+      {showAddModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <Card className="w-full max-w-md mx-4 max-h-[80vh] overflow-hidden flex flex-col">
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="flex items-center gap-2">
+                  <Plus className="w-5 h-5" />
+                  {marketType === 'spot' ? '현물' : '선물'} 코인 추가
+                </CardTitle>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => {
+                    setShowAddModal(false);
+                    setSearchSymbol('');
+                    setSearchResults([]);
+                  }}
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4 overflow-y-auto">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input
+                  placeholder="심볼 검색 (예: BTC, ETH, BEAT...)"
+                  value={searchSymbol}
+                  onChange={(e) => setSearchSymbol(e.target.value.toUpperCase())}
+                  className="pl-9"
+                  autoFocus
+                />
+              </div>
+
+              {searchLoading && (
+                <div className="flex items-center justify-center py-8">
+                  <Loader className="w-6 h-6 animate-spin text-muted-foreground" />
+                </div>
+              )}
+
+              {!searchLoading && searchResults.length > 0 && (
+                <div className="space-y-1 max-h-[300px] overflow-y-auto">
+                  {searchResults.map((result) => (
+                    <Button
+                      key={result.symbol}
+                      variant="ghost"
+                      className="w-full justify-between h-auto py-3"
+                      onClick={() => handleAddCoin(result.symbol)}
+                      disabled={addLoading || currentSymbols.includes(result.symbol)}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="text-left">
+                          <div className="font-medium">{result.symbol}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {result.baseAsset}/{result.quoteAsset}
+                          </div>
+                        </div>
+                      </div>
+                      {currentSymbols.includes(result.symbol) ? (
+                        <Badge variant="secondary">추가됨</Badge>
+                      ) : (
+                        <Plus className="w-4 h-4" />
+                      )}
+                    </Button>
+                  ))}
+                </div>
+              )}
+
+              {!searchLoading && searchSymbol && searchResults.length === 0 && (
+                <div className="text-center py-8 text-muted-foreground">
+                  검색 결과가 없습니다
+                </div>
+              )}
+
+              {!searchSymbol && (
+                <div className="text-center py-8 text-muted-foreground text-sm">
+                  심볼을 검색해서 코인을 추가하세요
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>

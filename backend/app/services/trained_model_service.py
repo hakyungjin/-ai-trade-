@@ -16,13 +16,10 @@ logger = logging.getLogger(__name__)
 class TrainedModelService:
     """학습된 모델을 사용한 예측 서비스"""
     
-    # 5클래스 레이블 매핑
-    LABEL_MAP_5 = {
-        0: ('STRONG_SELL', -2),
-        1: ('SELL', -1),
-        2: ('HOLD', 0),
-        3: ('BUY', 1),
-        4: ('STRONG_BUY', 2)
+    # 2클래스 레이블 매핑 (횡보 제거!)
+    LABEL_MAP_2 = {
+        0: ('SELL', -1),
+        1: ('BUY', 1)
     }
     
     # 3클래스 레이블 매핑
@@ -30,6 +27,15 @@ class TrainedModelService:
         0: ('SELL', -1),
         1: ('HOLD', 0),
         2: ('BUY', 1)
+    }
+    
+    # 5클래스 레이블 매핑
+    LABEL_MAP_5 = {
+        0: ('STRONG_SELL', -2),
+        1: ('SELL', -1),
+        2: ('HOLD', 0),
+        3: ('BUY', 1),
+        4: ('STRONG_BUY', 2)
     }
     
     def __init__(
@@ -81,7 +87,10 @@ class TrainedModelService:
                 self.num_classes = 5  # 기본값
             
             # 클래스 수에 따라 레이블 매핑 설정
-            if self.num_classes == 3:
+            if self.num_classes == 2:
+                self.label_map = self.LABEL_MAP_2
+                logger.info(f"   Using 2-class model (SELL/BUY - 횡보 제거!)")
+            elif self.num_classes == 3:
                 self.label_map = self.LABEL_MAP_3
                 logger.info(f"   Using 3-class model (SELL/HOLD/BUY)")
             else:
@@ -189,8 +198,111 @@ class TrainedModelService:
             return self._default_response(f"Prediction error: {str(e)}")
     
     def _create_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """추가 피처 생성 (연속 패턴 포함)"""
+        """추가 피처 생성 (OBV, MFI, 캔들 패턴 포함)"""
         df = df.copy()
+        
+        # ===== OBV (On Balance Volume) - 스마트머니 추적 =====
+        obv = [0]
+        for i in range(1, len(df)):
+            if df['close'].iloc[i] > df['close'].iloc[i-1]:
+                obv.append(obv[-1] + df['volume'].iloc[i])
+            elif df['close'].iloc[i] < df['close'].iloc[i-1]:
+                obv.append(obv[-1] - df['volume'].iloc[i])
+            else:
+                obv.append(obv[-1])
+        df['obv'] = obv
+        
+        # OBV 이동평균 및 기울기
+        df['obv_ma_20'] = df['obv'].rolling(20).mean()
+        df['obv_slope'] = (df['obv'] - df['obv'].shift(5)) / (df['obv'].shift(5).abs() + 1e-8)
+        
+        # OBV 다이버전스 (가격 vs OBV 방향 불일치)
+        price_direction = np.sign(df['close'] - df['close'].shift(5))
+        obv_direction = np.sign(df['obv'] - df['obv'].shift(5))
+        df['obv_divergence'] = (price_direction != obv_direction).astype(int)
+        
+        # ===== MFI (Money Flow Index) - 거래량 가중 RSI =====
+        typical_price = (df['high'] + df['low'] + df['close']) / 3
+        money_flow = typical_price * df['volume']
+        
+        positive_flow = money_flow.where(typical_price > typical_price.shift(1), 0)
+        negative_flow = money_flow.where(typical_price < typical_price.shift(1), 0)
+        
+        positive_mf = positive_flow.rolling(14).sum()
+        negative_mf = negative_flow.rolling(14).sum()
+        
+        mfi_ratio = positive_mf / (negative_mf + 1e-8)
+        df['mfi'] = 100 - (100 / (1 + mfi_ratio))
+        df['mfi_normalized'] = df['mfi'] / 100
+        df['mfi_overbought'] = (df['mfi'] > 80).astype(int)
+        df['mfi_oversold'] = (df['mfi'] < 20).astype(int)
+        
+        # ===== Williams %R - 모멘텀 =====
+        highest_high = df['high'].rolling(14).max()
+        lowest_low = df['low'].rolling(14).min()
+        df['williams_r'] = -100 * (highest_high - df['close']) / (highest_high - lowest_low + 1e-8)
+        df['williams_overbought'] = (df['williams_r'] > -20).astype(int)
+        df['williams_oversold'] = (df['williams_r'] < -80).astype(int)
+        
+        # ===== ATR 비율 (변동성 정규화) =====
+        if 'atr_14' in df.columns:
+            df['atr_ratio'] = df['atr_14'] / df['close'] * 100
+        else:
+            high_low = df['high'] - df['low']
+            high_close = np.abs(df['high'] - df['close'].shift())
+            low_close = np.abs(df['low'] - df['close'].shift())
+            tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+            df['atr_14'] = tr.rolling(14).mean()
+            df['atr_ratio'] = df['atr_14'] / df['close'] * 100
+        
+        # ===== 캔들 패턴 감지 =====
+        body = df['close'] - df['open']
+        body_abs = abs(body)
+        upper_shadow = df['high'] - df[['open', 'close']].max(axis=1)
+        lower_shadow = df[['open', 'close']].min(axis=1) - df['low']
+        candle_range = df['high'] - df['low']
+        
+        # 도지 (Doji)
+        df['pattern_doji'] = (body_abs < candle_range * 0.1).astype(int)
+        
+        # 망치형 (Hammer)
+        df['pattern_hammer'] = (
+            (lower_shadow > body_abs * 2) &
+            (upper_shadow < body_abs * 0.5) &
+            (df['close'] > df['open'])
+        ).astype(int)
+        
+        # 역망치형 (Inverted Hammer)
+        df['pattern_inverted_hammer'] = (
+            (upper_shadow > body_abs * 2) &
+            (lower_shadow < body_abs * 0.5) &
+            (df['close'] > df['open'])
+        ).astype(int)
+        
+        # 잉걸핑 (Engulfing)
+        prev_body = (df['close'].shift(1) - df['open'].shift(1)).abs()
+        df['pattern_bullish_engulfing'] = (
+            (df['close'].shift(1) < df['open'].shift(1)) &
+            (df['close'] > df['open']) &
+            (body_abs > prev_body * 1.5) &
+            (df['open'] < df['close'].shift(1)) &
+            (df['close'] > df['open'].shift(1))
+        ).astype(int)
+        
+        df['pattern_bearish_engulfing'] = (
+            (df['close'].shift(1) > df['open'].shift(1)) &
+            (df['close'] < df['open']) &
+            (body_abs > prev_body * 1.5) &
+            (df['open'] > df['close'].shift(1)) &
+            (df['close'] < df['open'].shift(1))
+        ).astype(int)
+        
+        # 슈팅스타 (Shooting Star)
+        df['pattern_shooting_star'] = (
+            (upper_shadow > body_abs * 2) &
+            (lower_shadow < candle_range * 0.1) &
+            (df['close'] < df['open'])
+        ).astype(int)
         
         # ===== 가격 변화 =====
         df['price_change_1'] = df['close'].pct_change(1)
@@ -198,12 +310,51 @@ class TrainedModelService:
         df['price_change_10'] = df['close'].pct_change(10)
         df['price_change_20'] = df['close'].pct_change(20)
         
-        # ===== 거래량 관련 =====
+        # ===== 거래량 관련 (알트코인 강화) =====
         df['volume_change_1'] = df['volume'].pct_change(1)
         df['volume_change_5'] = df['volume'].pct_change(5)
+        df['volume_change_10'] = df['volume'].pct_change(10)
         df['volume_ma_ratio'] = df['volume'] / df['volume'].rolling(20).mean()
         df['volume_ma_ratio_5'] = df['volume'] / df['volume'].rolling(5).mean()
+        df['volume_ma_ratio_10'] = df['volume'] / df['volume'].rolling(10).mean()
+        
+        # 거래량 급증 (다단계)
         df['volume_spike'] = (df['volume'] > df['volume'].rolling(20).mean() * 2).astype(int)
+        df['volume_spike_3x'] = (df['volume'] > df['volume'].rolling(20).mean() * 3).astype(int)
+        df['volume_spike_5x'] = (df['volume'] > df['volume'].rolling(20).mean() * 5).astype(int)
+        
+        # 거래량 급증 강도
+        df['volume_surge_intensity'] = df['volume'] / (df['volume'].rolling(20).mean() + 1e-8)
+        df['volume_surge_intensity'] = df['volume_surge_intensity'].clip(upper=10)
+        
+        # 거래량 + 가격 상관관계
+        df['volume_price_trend'] = df['volume_change_1'] * df['price_change_1'] * 100
+        df['volume_price_correlation'] = df['volume'].rolling(10).corr(df['close'])
+        
+        # 거래량 모멘텀
+        df['volume_momentum_5'] = df['volume'].rolling(5).mean() / df['volume'].rolling(20).mean()
+        df['volume_momentum_10'] = df['volume'].rolling(10).mean() / df['volume'].rolling(20).mean()
+        
+        # 거래량 기반 신호
+        vol_ma = df['volume'].rolling(20).mean()
+        df['volume_breakout'] = (
+            (df['volume'] > vol_ma * 2) &
+            (abs(df['price_change_1']) > 0.01)
+        ).astype(int)
+        
+        df['volume_up_signal'] = (
+            (df['volume'] > vol_ma * 2) &
+            (df['close'] > df['open']) &
+            (df['price_change_1'] > 0.005)
+        ).astype(int) * df['volume_surge_intensity']
+        
+        df['volume_down_signal'] = (
+            (df['volume'] > vol_ma * 2) &
+            (df['close'] < df['open']) &
+            (df['price_change_1'] < -0.005)
+        ).astype(int) * df['volume_surge_intensity']
+        
+        df['volume_trend'] = (df['volume'].rolling(5).mean() - df['volume'].rolling(20).mean()) / (df['volume'].rolling(20).mean() + 1e-8)
         
         # ===== 가격 위치 =====
         df['price_position'] = (df['close'] - df['low']) / (df['high'] - df['low'] + 1e-8)
@@ -214,6 +365,54 @@ class TrainedModelService:
         # ===== 변동성 =====
         df['volatility_5'] = df['close'].rolling(5).std() / df['close'].rolling(5).mean()
         df['volatility_20'] = df['close'].rolling(20).std() / df['close'].rolling(20).mean()
+        
+        # ===== 펌프 앤 덤프 패턴 감지 (알트코인 핵심!) =====
+        
+        # 급등 감지
+        df['pump_3'] = df['close'].pct_change(3)
+        df['pump_6'] = df['close'].pct_change(6)
+        df['pump_12'] = df['close'].pct_change(12)
+        
+        # 고점 대비 하락률 (덤프 감지)
+        df['high_12'] = df['high'].rolling(12).max()
+        df['high_24'] = df['high'].rolling(24).max()
+        df['drawdown_from_high_12'] = (df['close'] - df['high_12']) / df['high_12']
+        df['drawdown_from_high_24'] = (df['close'] - df['high_24']) / df['high_24']
+        
+        # 펌프 앤 덤프 패턴 신호
+        df['pump_then_dump'] = (
+            (df['pump_6'] > 0.03) &
+            (df['price_change_1'] < -0.01)
+        ).astype(int)
+        
+        df['dump_then_pump'] = (
+            (df['drawdown_from_high_12'] < -0.05) &
+            (df['price_change_1'] > 0.005)
+        ).astype(int)
+        
+        # 과열/과매도 감지
+        df['overheated'] = (
+            (df['pump_12'] > 0.05) &
+            (df['rsi_14'] > 70 if 'rsi_14' in df.columns else df['pump_12'] > 0.08)
+        ).astype(int)
+        
+        df['oversold_bounce'] = (
+            (df['drawdown_from_high_24'] < -0.08) &
+            (df['price_change_1'] > 0)
+        ).astype(int)
+        
+        # 변동성 급증
+        df['volatility_spike'] = (
+            df['volatility_5'] > df['volatility_20'] * 1.5
+        ).astype(int)
+        
+        # 고점/저점 근처
+        df['near_high'] = (df['close'] > df['high_24'] * 0.98).astype(int)
+        df['near_low'] = (df['close'] < df['low_20'] * 1.02).astype(int)
+        
+        # 강도 지표
+        df['pump_strength'] = df['pump_6'] * df['volume_surge_intensity']
+        df['dump_strength'] = abs(df['drawdown_from_high_12']) * df['volume_surge_intensity']
         
         # ===== 캔들 패턴 =====
         df['candle_body'] = abs(df['close'] - df['open']) / (df['high'] - df['low'] + 1e-8)
@@ -309,6 +508,19 @@ class TrainedModelService:
         df['cumulative_change_3'] = df['price_change_1'].rolling(3).sum()
         df['cumulative_change_5'] = df['price_change_1'].rolling(5).sum()
         
+        # ===== 복합 신호 (OBV + 거래량 + 가격) =====
+        df['strong_buy_signal'] = (
+            (df['obv_slope'] > 0.1) &
+            (df['volume'] > df['volume'].rolling(20).mean() * 1.5) &
+            (df['close'] > df['close'].shift(1))
+        ).astype(int)
+        
+        df['strong_sell_signal'] = (
+            (df['obv_slope'] < -0.1) &
+            (df['volume'] > df['volume'].rolling(20).mean() * 1.5) &
+            (df['close'] < df['close'].shift(1))
+        ).astype(int)
+        
         return df
     
     def _default_response(self, reason: str) -> Dict[str, Any]:
@@ -329,10 +541,15 @@ class TrainedModelService:
         confidence: float,
         probabilities: np.ndarray
     ) -> str:
-        """분석 텍스트 생성 (3클래스/5클래스 모델 모두 지원)"""
+        """분석 텍스트 생성 (2클래스/3클래스/5클래스 모델 모두 지원)"""
         
         # 클래스 수에 따라 확률 계산
-        if len(probabilities) == 3:
+        if len(probabilities) == 2:
+            # 2클래스: SELL(0), BUY(1) - 횡보 제거!
+            sell_prob = probabilities[0]
+            hold_prob = 0  # 횡보 없음
+            buy_prob = probabilities[1]
+        elif len(probabilities) == 3:
             # 3클래스: SELL(0), HOLD(1), BUY(2)
             sell_prob = probabilities[0]
             hold_prob = probabilities[1]

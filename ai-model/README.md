@@ -36,11 +36,74 @@ python scripts/train_model.py --input data/btcusdt_5m_training.csv --model-name 
 python scripts/collect_monitored_coins.py --symbols BEATUSDT --market futures --timeframe 5m --target 50000
 
 # 2. 학습 데이터 준비 (3클래스)
-python scripts/prepare_training_data.py --symbol BEATUSDT --timeframe 5m --threshold 0.01 --future 6 --limit 50000 --classes 3
+python scripts/prepare_training_data.py --symbol BEATUSDT --timeframe 5m --threshold 0.01 --future 3 --limit 50000 --classes 3
 
 # 3. 모델 학습
 python scripts/train_model.py --input data/beatusdt_5m_training.csv --model-name xgboost_beatusdt_5m
 ```
+
+---
+
+## 🧠 LSTM 시계열 모델 (PyTorch)
+
+XGBoost는 **현재 봉 1개**만 보지만, LSTM은 **20봉 시퀀스 전체 패턴**을 학습합니다.
+
+### LSTM 학습 명령어
+
+```powershell
+# 1. 데이터 준비 (이미 했으면 스킵)
+python scripts/prepare_training_data.py --symbol BTCUSDT --timeframe 5m --limit 10000
+
+# 2. LSTM 학습 (PyTorch)
+python scripts/train_lstm.py --symbol BTCUSDT --timeframe 5m --seq-length 20 --epochs 100
+
+# 옵션 설명:
+#   --seq-length 20   : 20봉 시퀀스로 패턴 학습 (기본값)
+#   --epochs 100      : 최대 학습 에포크 (early stopping 있음)
+#   --batch-size 32   : 배치 크기
+#   --lr 0.001        : 학습률
+```
+
+### XGBoost vs LSTM 비교
+
+| 항목 | XGBoost | LSTM |
+|------|---------|------|
+| 입력 | 현재 봉 피처 1개 | 20봉 시퀀스 패턴 |
+| 시계열 | ❌ 못 봄 | ✅ 패턴 학습 |
+| 학습 속도 | ⚡ 빠름 (분) | 🐢 느림 (시간) |
+| 데이터 필요량 | 1K~10K | 10K+ |
+| 해석 가능성 | ✅ 피처 중요도 | ❌ 블랙박스 |
+
+### 앙상블 (XGBoost + LSTM)
+
+```python
+from ensemble_predictor import EnsemblePredictor
+
+predictor = EnsemblePredictor('BTCUSDT', '5m', xgb_weight=0.6, lstm_weight=0.4)
+result = predictor.predict(candles_df)
+
+# 결과:
+# {
+#     'signal': 'BUY',
+#     'confidence': 0.72,
+#     'agreement': True,  # 두 모델 동의 여부
+#     'xgb_signal': 'BUY',
+#     'lstm_signal': 'BUY'
+# }
+```
+
+---
+
+## 📊 추가된 고급 피처
+
+| 카테고리 | 피처 | 설명 |
+|----------|------|------|
+| **OBV** | `obv_slope`, `obv_divergence` | 스마트머니 흐름, 다이버전스 |
+| **MFI** | `mfi_normalized`, `mfi_overbought/oversold` | 거래량 가중 RSI |
+| **Williams %R** | `williams_r`, `overbought/oversold` | 모멘텀 과매수/과매도 |
+| **ATR 비율** | `atr_ratio` | 변동성 정규화 |
+| **캔들 패턴** | `pattern_doji`, `hammer`, `engulfing` | 반전 신호 감지 |
+| **복합 신호** | `strong_buy/sell_signal` | OBV+거래량+가격 종합 |
 
 ### backend 폴더에서 서버 실행
 
