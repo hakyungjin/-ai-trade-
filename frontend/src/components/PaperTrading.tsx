@@ -631,7 +631,7 @@ export function PaperTrading() {
           </Card>
 
           {/* 차트 */}
-          <PriceChart symbol={selectedSymbol} marketType={marketType} />
+          <PriceChart symbol={selectedSymbol} />
 
           {/* 현재 심볼 포지션 */}
           {currentSymbolPositions.length > 0 && (

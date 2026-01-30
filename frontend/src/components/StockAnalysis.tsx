@@ -75,9 +75,8 @@ interface SignalStats {
 }
 
 export function StockAnalysis() {
-  const [selectedSymbol, setSelectedSymbol] = useState<string>('AAPL');
+  const [selectedSymbol, setSelectedSymbol] = useState<string>('');
   const [monitoredStocks, setMonitoredStocks] = useState<MonitoredStock[]>([]);
-  const [defaultSymbols] = useState<string[]>(['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA']);
   
   const [currentPrice, setCurrentPrice] = useState<number>(0);
   const [priceChange, setPriceChange] = useState<number>(0);
@@ -108,6 +107,10 @@ export function StockAnalysis() {
       const response = await apiClient.get('/v1/stocks/monitoring');
       const stocksData = response.data.data || response.data.stocks || [];
       setMonitoredStocks(stocksData);
+      // 첫 번째 주식을 자동 선택
+      if (stocksData.length > 0 && !selectedSymbol) {
+        setSelectedSymbol(stocksData[0].symbol);
+      }
     } catch (error) {
       console.error('Failed to load monitored stocks:', error);
     }
@@ -312,11 +315,7 @@ export function StockAnalysis() {
     return monitoredStocks.find((s) => s.symbol === symbol);
   };
 
-  const isDefaultSymbol = (symbol: string) => {
-    return defaultSymbols.includes(symbol);
-  };
-
-  const allSymbols = [...new Set([...defaultSymbols, ...monitoredStocks.map(s => s.symbol)])];
+  const allSymbols = monitoredStocks.map(s => s.symbol);
 
   return (
     <div className="p-4 md:p-6 space-y-6">
@@ -355,12 +354,27 @@ export function StockAnalysis() {
       {/* 심볼 선택 */}
       <Card>
         <CardContent className="p-4">
-          <div className="flex flex-wrap gap-2">
-            {allSymbols.map((symbol) => {
-              const monitoredStock = getMonitoredStock(symbol);
-              const isDefault = isDefaultSymbol(symbol);
-              
-              return (
+          {allSymbols.length === 0 ? (
+            <div className="text-center py-8">
+              <AlertCircle className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+              <p className="text-muted-foreground">
+                모니터링할 주식을 추가해주세요
+              </p>
+              <Button
+                onClick={() => setShowAddModal(true)}
+                className="mt-4"
+                variant="default"
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                주식 추가
+              </Button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {allSymbols.map((symbol) => {
+                const monitoredStock = getMonitoredStock(symbol);
+                
+                return (
                 <div
                   key={symbol}
                   className={cn(
@@ -381,7 +395,7 @@ export function StockAnalysis() {
                   >
                     {symbol}
                   </Button>
-                  {monitoredStock && !isDefault && (
+                  {monitoredStock && (
                     <Button
                       variant="ghost"
                       size="icon"
@@ -401,21 +415,23 @@ export function StockAnalysis() {
                   )}
                 </div>
               );
-            })}
-          </div>
+              })}
+            </div>
+          )}
         </CardContent>
       </Card>
 
       {/* 탭 선택 */}
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'analysis' | 'model')}>
-        <TabsList className="grid w-full grid-cols-2 max-w-md">
-          <TabsTrigger value="analysis" className="flex items-center gap-2">
-            <BarChart3 className="w-4 h-4" />
-            분석
-          </TabsTrigger>
-          <TabsTrigger value="model" className="flex items-center gap-2">
-            <Brain className="w-4 h-4" />
-            모델 성능
+      {selectedSymbol ? (
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'analysis' | 'model')}>
+          <TabsList className="grid w-full grid-cols-2 max-w-md">
+            <TabsTrigger value="analysis" className="flex items-center gap-2">
+              <BarChart3 className="w-4 h-4" />
+              분석
+            </TabsTrigger>
+            <TabsTrigger value="model" className="flex items-center gap-2">
+              <Brain className="w-4 h-4" />
+              모델 성능
           </TabsTrigger>
         </TabsList>
 
@@ -450,7 +466,7 @@ export function StockAnalysis() {
               </Card>
 
               {/* 차트 */}
-              <PriceChart symbol={selectedSymbol} marketType="spot" />
+              <PriceChart symbol={selectedSymbol} />
             </div>
 
             {/* 분석 패널 */}
@@ -879,7 +895,8 @@ export function StockAnalysis() {
             </Card>
           </div>
         </TabsContent>
-      </Tabs>
+        </Tabs>
+      ) : null}
 
       {/* 주식 추가 모달 */}
       {showAddModal && (

@@ -554,7 +554,7 @@ export function CoinAnalysis() {
               </Card>
 
               {/* 차트 */}
-              <PriceChart symbol={selectedSymbol} marketType={marketType} />
+              <PriceChart symbol={selectedSymbol} />
             </div>
 
         {/* 분석 패널 */}

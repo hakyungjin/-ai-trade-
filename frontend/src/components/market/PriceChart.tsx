@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -26,7 +26,6 @@ interface Candle {
 
 interface PriceChartProps {
   symbol: string;
-  marketType?: 'spot' | 'futures';
   onSymbolChange?: (symbol: string) => void;
 }
 
@@ -39,7 +38,7 @@ const INTERVALS = [
   { value: '1d', label: '1일' },
 ];
 
-export function PriceChart({ symbol, marketType = 'spot' }: PriceChartProps) {
+export function PriceChart({ symbol }: PriceChartProps) {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [selectedInterval, setSelectedInterval] = useState('1m');
   const [currentPrice, setCurrentPrice] = useState(0);
@@ -64,13 +63,6 @@ export function PriceChart({ symbol, marketType = 'spot' }: PriceChartProps) {
     mountedRef.current = true;
     reconnectAttemptsRef.current = 0;
     
-    // 심볼 변경 시 데이터 초기화
-    setCandles([]);
-    setCurrentPrice(0);
-    setPriceChange(0);
-    setIsLoading(true);
-    setIndicators({});
-    
     // 기존 WebSocket 정리
     if (wsRef.current) {
       wsRef.current.close();
@@ -83,139 +75,9 @@ export function PriceChart({ symbol, marketType = 'spot' }: PriceChartProps) {
       reconnectTimeoutRef.current = null;
     }
 
-    // 새 데이터 로드 및 연결 (현재 symbol, interval, marketType 사용)
-    const currentSymbol = symbol;
-    const currentInterval = selectedInterval;
-    const currentMarketType = marketType;
-    
-    const loadData = async () => {
-      try {
-        const response = await marketApi.getKlines(currentSymbol, currentInterval, 200, currentMarketType);
-        if (response.data.success && mountedRef.current) {
-          setCandles(response.data.data);
-          if (response.data.data.length > 0) {
-            const latest = response.data.data[response.data.data.length - 1];
-            const first = response.data.data[0];
-            setCurrentPrice(latest.close);
-            // 변동률 계산 (첫 캔들 대비)
-            if (first.open > 0) {
-              const change = ((latest.close - first.open) / first.open) * 100;
-              setPriceChange(change);
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Failed to load initial chart data:', error);
-      } finally {
-        if (mountedRef.current) {
-          setIsLoading(false);
-        }
-      }
-    };
-    
-    const connectWS = () => {
-      try {
-        const wsUrl = getWebSocketUrl();
-        const socket = new WebSocket(`${wsUrl}/api/chart/ws/realtime/${currentSymbol}?interval=${currentInterval}&market_type=${currentMarketType}`);
-
-        socket.onopen = () => {
-          console.log(`Chart WebSocket connected: ${currentSymbol} ${currentInterval} (${currentMarketType})`);
-          reconnectAttemptsRef.current = 0;
-          if (mountedRef.current) {
-            setIsConnected(true);
-          }
-        };
-
-        socket.onmessage = (event) => {
-          if (!mountedRef.current) return;
-
-          try {
-            const data = JSON.parse(event.data);
-
-            if (data.type === 'initial') {
-              console.log(`[${currentSymbol} ${currentInterval}] Received initial data: ${data.data.length} candles`);
-              setCandles(data.data);
-              
-              if (data.indicators) {
-                setIndicators(data.indicators);
-              }
-              
-              if (data.data.length > 0) {
-                const latest = data.data[data.data.length - 1];
-                const first = data.data[0];
-                setCurrentPrice(latest.close);
-                // 변동률 계산 (첫 캔들 대비)
-                if (first.open > 0) {
-                  const change = ((latest.close - first.open) / first.open) * 100;
-                  setPriceChange(change);
-                }
-              }
-              setIsLoading(false);
-            } else if (data.type === 'update') {
-              if (data.latestCandle) {
-                setCurrentPrice(data.latestCandle.close);
-                
-                setCandles(prev => {
-                  if (prev.length === 0) return prev;
-                  const newCandles = [...prev];
-                  const lastIndex = newCandles.length - 1;
-                  
-                  if (newCandles[lastIndex].timestamp === data.latestCandle.timestamp) {
-                    newCandles[lastIndex] = data.latestCandle;
-                  } else {
-                    newCandles.push(data.latestCandle);
-                    if (newCandles.length > 200) {
-                      newCandles.shift();
-                    }
-                  }
-                  
-                  // 변동률 업데이트 (첫 캔들 대비)
-                  if (newCandles.length > 0 && newCandles[0].open > 0) {
-                    const change = ((data.latestCandle.close - newCandles[0].open) / newCandles[0].open) * 100;
-                    setPriceChange(change);
-                  }
-                  
-                  return newCandles;
-                });
-              }
-            }
-          } catch (e) {
-            console.error('Failed to parse WebSocket message:', e);
-          }
-        };
-
-        socket.onclose = (event) => {
-          if (mountedRef.current) {
-            setIsConnected(false);
-            
-            if (!event.wasClean && reconnectAttemptsRef.current < 5) {
-              reconnectAttemptsRef.current++;
-              const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
-              
-              reconnectTimeoutRef.current = setTimeout(() => {
-                if (mountedRef.current && wsRef.current === null) {
-                  connectWS();
-                }
-              }, delay);
-            }
-          }
-        };
-
-        socket.onerror = (error) => {
-          console.error('WebSocket error:', error);
-        };
-
-        wsRef.current = socket;
-      } catch (error) {
-        console.error('Failed to connect WebSocket:', error);
-        if (mountedRef.current) {
-          setIsConnected(false);
-        }
-      }
-    };
-    
-    loadData();
-    connectWS();
+    // 새 데이터 로드 및 연결
+    loadInitialData();
+    connectWebSocket();
 
     return () => {
       mountedRef.current = false;
@@ -228,7 +90,162 @@ export function PriceChart({ symbol, marketType = 'spot' }: PriceChartProps) {
         reconnectTimeoutRef.current = null;
       }
     };
-  }, [symbol, selectedInterval, marketType]);
+  }, [symbol, selectedInterval]);
+
+  const loadInitialData = async () => {
+    try {
+      setIsLoading(true);
+      const response = await marketApi.getKlines(symbol, selectedInterval, 200);
+      if (response.data.success && mountedRef.current) {
+        setCandles(response.data.data);
+        if (response.data.data.length > 0) {
+          const latest = response.data.data[response.data.data.length - 1];
+          const firstCandle = response.data.data[0];
+          setCurrentPrice(latest.close);
+          
+          // 첫 캔들의 시작가를 기준으로 변화율 계산
+          const change = ((latest.close - firstCandle.open) / firstCandle.open) * 100;
+          setPriceChange(change);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load chart data:', error);
+    } finally {
+      if (mountedRef.current) {
+        setIsLoading(false);
+      }
+    }
+  };
+
+  const connectWebSocket = useCallback(() => {
+    if (wsRef.current) {
+      wsRef.current.close();
+    }
+
+    try {
+      const wsUrl = getWebSocketUrl();
+      const socket = new WebSocket(`${wsUrl}/api/chart/ws/realtime/${symbol}?interval=${selectedInterval}`);
+
+      socket.onopen = () => {
+        console.log(`Chart WebSocket connected: ${symbol} ${selectedInterval}`);
+        reconnectAttemptsRef.current = 0; // 연결 성공 시 재설정
+        if (mountedRef.current) {
+          setIsConnected(true);
+        }
+      };
+
+      socket.onmessage = (event) => {
+        if (!mountedRef.current) return;
+
+        try {
+          const data = JSON.parse(event.data);
+
+          if (data.type === 'initial') {
+            console.log(`[${symbol} ${selectedInterval}] Received initial data: ${data.data.length} candles`);
+            setCandles(data.data);
+            
+            // 지표 데이터 추출 (있으면)
+            if (data.indicators) {
+              setIndicators(data.indicators);
+            }
+            
+            if (data.data.length > 0) {
+              const latest = data.data[data.data.length - 1];
+              const firstCandle = data.data[0];
+              setCurrentPrice(latest.close);
+              
+              // 변화율 계산
+              const change = ((latest.close - firstCandle.open) / firstCandle.open) * 100;
+              setPriceChange(change);
+            }
+          } else if (data.type === 'update' || data.type === 'kline') {
+            // 최신 캔들 업데이트
+            if (data.latestCandle) {
+              let candleList: Candle[] = [];
+              
+              setCandles((prev) => {
+                candleList = prev;
+                const newCandles = [...prev];
+                const lastIndex = newCandles.length - 1;
+
+                if (lastIndex >= 0 && newCandles[lastIndex].timestamp === data.latestCandle.timestamp) {
+                  // 같은 캔들 업데이트
+                  newCandles[lastIndex] = data.latestCandle;
+                } else {
+                  // 새 캔들 추가
+                  newCandles.push(data.latestCandle);
+                  if (newCandles.length > 200) {
+                    newCandles.shift();
+                  }
+                }
+
+                return newCandles;
+              });
+
+              setCurrentPrice(data.latestCandle.close);
+              
+              // 변화율 업데이트 (첫 캔들 기준)
+              if (candleList.length > 0) {
+                const change = ((data.latestCandle.close - candleList[0].open) / candleList[0].open) * 100;
+                setPriceChange(change);
+              }
+            }
+          } else if (data.type === 'close') {
+            // 백엔드에서 보낸 close 신호 처리
+            console.log(`[${symbol} ${selectedInterval}] Received close signal: ${data.reason}`);
+            if (wsRef.current) {
+              wsRef.current.close();
+              wsRef.current = null;
+            }
+          } else if (data.type === 'error') {
+            console.error(`[${symbol} ${selectedInterval}] WebSocket error:`, data.message);
+          }
+        } catch (err) {
+          console.error('Failed to parse WebSocket message:', err);
+        }
+      };
+
+      socket.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        if (mountedRef.current) {
+          setIsConnected(false);
+        }
+      };
+
+      socket.onclose = () => {
+        console.log('Chart WebSocket disconnected');
+        wsRef.current = null;
+        if (mountedRef.current) {
+          setIsConnected(false);
+          
+          // 재연결 시도 제한 (최대 5회)
+          if (reconnectAttemptsRef.current < 5) {
+            // exponential backoff: 1초, 2초, 4초, 8초, 15초
+            const delays = [1000, 2000, 4000, 8000, 15000];
+            const delay = delays[reconnectAttemptsRef.current];
+            reconnectAttemptsRef.current += 1;
+            console.log(`Reconnecting WebSocket in ${delay}ms (attempt ${reconnectAttemptsRef.current}/5)...`);
+            
+            reconnectTimeoutRef.current = setTimeout(() => {
+              if (mountedRef.current && wsRef.current === null) {
+                connectWebSocket();
+              }
+            }, delay);
+          } else {
+            console.error('Max reconnection attempts reached');
+            setIsLoading(false);
+          }
+        }
+      };
+
+      wsRef.current = socket;
+    } catch (error) {
+      console.error('Failed to connect WebSocket:', error);
+      if (mountedRef.current) {
+        setIsConnected(false);
+      }
+    }
+  }, [symbol, selectedInterval]);
 
   const formatPrice = (price: number) => {
     if (price >= 1000) return price.toLocaleString('en-US', { maximumFractionDigits: 2 });
@@ -273,6 +290,8 @@ export function PriceChart({ symbol, marketType = 'spot' }: PriceChartProps) {
   const maxPrice = prices.length > 0 ? Math.max(...prices) * 1.001 : 1;
 
   const TrendIcon = priceChange > 0 ? TrendingUp : priceChange < 0 ? TrendingDown : Minus;
+
+
 
   if (isLoading || candles.length === 0) {
     return (
@@ -430,9 +449,9 @@ export function PriceChart({ symbol, marketType = 'spot' }: PriceChartProps) {
                 dataKey="high"
                 fill="transparent"
                 isAnimationActive={false}
-                shape={(props: any) => {
+                shape={(props: any): React.ReactElement => {
                   const { x, y, width, payload } = props;
-                  if (!payload) return <></>;
+                  if (!payload) return <g />;
                   
                   const wickX = x + width / 2;
                   const wickTop = Math.min(y, y + 10); // high의 Y값
@@ -461,9 +480,9 @@ export function PriceChart({ symbol, marketType = 'spot' }: PriceChartProps) {
                 dataKey="close"
                 fill="transparent"
                 isAnimationActive={false}
-                shape={(props: any) => {
+                shape={(props: any): React.ReactElement => {
                   const { x, y, width, payload } = props;
-                  if (!payload) return <></>;
+                  if (!payload) return <g />;
                   
                   const bodyX = x + width / 4;
                   const bodyWidth = width / 2;
