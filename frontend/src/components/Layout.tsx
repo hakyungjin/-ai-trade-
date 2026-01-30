@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, Link } from 'react-router-dom';
 import {
   TrendingUp,
   Bot,
@@ -21,14 +21,14 @@ export function Layout() {
   const isCrypto = location.pathname.startsWith('/crypto');
 
   const cryptoNavItems = [
-    { to: '/crypto', icon: Coins, label: '코인 분석' },
-    { to: '/crypto/paper-trading', icon: TrendingUp, label: '페이퍼 트레이딩' },
-    { to: '/crypto/model-prep', icon: Bot, label: '모델 준비' },
+    { to: '/crypto', icon: Coins, label: '코인 분석', end: true },
+    { to: '/crypto/paper-trading', icon: TrendingUp, label: '페이퍼 트레이딩', end: false },
+    { to: '/crypto/model-prep', icon: Bot, label: '모델 준비', end: false },
   ];
 
   const stocksNavItems = [
-    { to: '/stocks', icon: BarChart3, label: '주식 분석' },
-    { to: '/stocks/paper-trading', icon: TrendingUp, label: '페이퍼 트레이딩' },
+    { to: '/stocks', icon: BarChart3, label: '주식 분석', end: true },
+    { to: '/stocks/paper-trading', icon: TrendingUp, label: '페이퍼 트레이딩', end: false },
   ];
 
   const navItems = isCrypto ? cryptoNavItems : stocksNavItems;
@@ -37,16 +37,16 @@ export function Layout() {
     <>
       <div className="p-4 border-b border-border">
         <div className="flex items-center gap-2 mb-4">
-          <Button 
-            variant="ghost" 
+          <Button
+            variant="ghost"
             size="sm"
             asChild
             className="text-muted-foreground hover:text-foreground"
           >
-            <a href="/">
+            <Link to="/" onClick={() => setMobileOpen(false)}>
               <HomeIcon className="w-4 h-4" />
               홈으로
-            </a>
+            </Link>
           </Button>
         </div>
         <h1 className="text-lg font-bold text-primary flex items-center gap-2">
@@ -71,6 +71,7 @@ export function Layout() {
             <li key={item.to}>
               <NavLink
                 to={item.to}
+                end={item.end}
                 onClick={() => setMobileOpen(false)}
                 className={({ isActive }) =>
                   cn(
