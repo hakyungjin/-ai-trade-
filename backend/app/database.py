@@ -1,3 +1,4 @@
+import asyncio
 import subprocess
 import os
 import logging
@@ -39,18 +40,30 @@ async def get_db():
 
 
 async def init_db():
-    """앱 시작 시 자동으로 Alembic 마이그레이션 실행"""
+    """앱 시작 시 자동으로 Alembic 마이그레이션을 백그라운드에서 실행"""
+    # 마이그레이션을 백그라운드에서 실행 (앱 시작을 차단하지 않음)
+    asyncio.create_task(run_migrations_async())
+
+
+async def run_migrations_async():
+    """백그라운드에서 마이그레이션 실행"""
     try:
+        # 5초 대기 (앱이 시작되도록)
+        await asyncio.sleep(5)
+        
         # Alembic 디렉토리 경로
         alembic_dir = os.path.join(os.path.dirname(__file__), '..', 'alembic')
         
         # alembic upgrade head 명령 실행
-        result = subprocess.run(
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            subprocess.run,
             ['alembic', 'upgrade', 'head'],
-            cwd=alembic_dir,
-            capture_output=True,
-            text=True,
-            env={**os.environ, 'DATABASE_URL': settings.database_url}
+            alembic_dir,  # cwd
+            subprocess.PIPE,  # stdout
+            subprocess.PIPE,  # stderr
+            False  # text
         )
         
         if result.returncode == 0:
