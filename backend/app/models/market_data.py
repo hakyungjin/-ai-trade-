@@ -24,8 +24,8 @@ class MarketCandle(Base):
     __table_args__ = (
         # 기존 복합 인덱스
         Index('idx_candle_symbol_time', 'symbol', 'timeframe', 'open_time'),
-        # ✅ 추가 최적화 인덱스
-        Index('idx_candle_symbol_tf_time_desc', 'symbol', 'timeframe', 'open_time', mysql_length={'symbol': 10}),
+        # ✅ 추가 최적화 인덱스 (MySQL/PostgreSQL 호환)
+        Index('idx_candle_symbol_tf_time_desc', 'symbol', 'timeframe', 'open_time'),
         Index('idx_candle_symbol_time_desc', 'symbol', 'open_time'),
         Index('idx_candle_time_desc', 'open_time'),
         # 중복 방지 (같은 심볼/타임프레임/시간의 캔들 중복 저장 방지)

@@ -350,3 +350,6 @@ def init_scheduler(binance_service: BinanceService) -> SmartCandleScheduler:
     return _scheduler
 
 
+
+
+

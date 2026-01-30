@@ -11,7 +11,7 @@ from app.services.weighted_strategy import WeightedStrategy
 from app.services.technical_indicators import TechnicalIndicators
 from app.services.vector_pattern_service import VectorPatternService
 from app.services.unified_data_service import UnifiedDataService
-from app.services.trained_model_service import get_trained_model_service, check_model_exists, get_available_models
+from app.services.trained_model_service import get_trained_model_service, check_model_exists, get_available_models, get_ensemble_service
 from app.config import get_settings
 from app.database import get_db
 from app.models.vector_pattern import VectorPattern
@@ -292,24 +292,22 @@ async def get_combined_analysis(
                 final_confidence=0.0
             )
 
-        # ===== AI 예측 (심볼별 XGBoost 모델) =====
+        # ===== AI 예측 (XGBoost + LSTM 앙상블) =====
         ai_prediction = None
-        model_exists = check_model_exists(request.symbol, request.timeframe)
         
-        if model_exists:
-            try:
-                trained_service = get_trained_model_service(request.symbol, request.timeframe)
-                if trained_service.is_loaded:
-                    logger.info(f"🤖 Using trained XGBoost model for {request.symbol} ({request.timeframe})")
-                    ai_prediction = trained_service.predict(candles)
-                    logger.info(f"✅ XGBoost prediction: {ai_prediction.get('signal')} (conf: {ai_prediction.get('confidence'):.2f})")
-                else:
-                    logger.warning(f"⚠️ XGBoost model for {request.symbol} not loaded")
-            except Exception as e:
-                logger.warning(f"⚠️ XGBoost model error for {request.symbol}: {e}")
-                ai_prediction = None
-        else:
-            logger.info(f"📝 No AI model for {request.symbol} ({request.timeframe})")
+        try:
+            # 앙상블 서비스 사용 (XGBoost + LSTM)
+            ensemble_service = get_ensemble_service(request.symbol, request.timeframe)
+            
+            if ensemble_service.is_loaded:
+                logger.info(f"🎯 Using Ensemble model (XGBoost + LSTM) for {request.symbol} ({request.timeframe})")
+                ai_prediction = ensemble_service.predict(candles)
+                logger.info(f"✅ Ensemble prediction: {ai_prediction.get('signal')} (conf: {ai_prediction.get('confidence'):.2f}) - {ai_prediction.get('model_used', 'Unknown')}")
+            else:
+                logger.info(f"📝 No AI models for {request.symbol} ({request.timeframe})")
+        except Exception as e:
+            logger.warning(f"⚠️ Ensemble model error for {request.symbol}: {e}")
+            ai_prediction = None
         
         if ai_prediction is None:
             ai_prediction = {

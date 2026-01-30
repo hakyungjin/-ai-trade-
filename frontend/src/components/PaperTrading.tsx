@@ -256,34 +256,77 @@ export function PaperTrading() {
   // 선물 거래 실행
   const handleOpenFuturesPosition = () => {
     const qty = parseFloat(quantity);
-    if (isNaN(qty) || qty <= 0 || currentPrice <= 0) return;
+    console.log('🚀 Opening futures position:', { qty, currentPrice, selectedSymbol, positionType, leverage });
+    
+    if (isNaN(qty) || qty <= 0) {
+      alert('수량을 입력해주세요');
+      return;
+    }
+    if (currentPrice <= 0) {
+      alert('가격 로딩 중입니다. 잠시 후 다시 시도해주세요');
+      return;
+    }
 
     const success = openFuturesPosition(selectedSymbol, positionType, currentPrice, qty, leverage);
+    console.log('📊 Position opened:', success);
     if (success) {
       setQuantity('');
+      setShowTradeForm(false);
+      alert(`✅ ${positionType} 포지션 오픈 완료!`);
+    } else {
+      alert('❌ 잔고가 부족합니다');
     }
   };
 
   // 현물 매수
   const handleBuySpot = () => {
     const qty = parseFloat(quantity);
-    if (isNaN(qty) || qty <= 0 || currentPrice <= 0) return;
+    console.log('🛒 Buying spot:', { qty, currentPrice, selectedSymbol });
+    
+    if (isNaN(qty) || qty <= 0) {
+      alert('수량을 입력해주세요');
+      return;
+    }
+    if (currentPrice <= 0) {
+      alert('가격 로딩 중입니다');
+      return;
+    }
 
     const success = buySpot(selectedSymbol, currentPrice, qty);
     if (success) {
       setQuantity('');
+      setSpotTradeType(null);
+      alert(`✅ ${selectedSymbol} 매수 완료!`);
+    } else {
+      alert('❌ 잔고가 부족합니다');
     }
   };
 
   // 현물 매도
   const handleSellSpot = () => {
     const qty = parseFloat(quantity);
-    if (isNaN(qty) || qty <= 0 || currentPrice <= 0) return;
-    if (qty > availableToSell) return;
+    console.log('💰 Selling spot:', { qty, currentPrice, selectedSymbol, availableToSell });
+    
+    if (isNaN(qty) || qty <= 0) {
+      alert('수량을 입력해주세요');
+      return;
+    }
+    if (currentPrice <= 0) {
+      alert('가격 로딩 중입니다');
+      return;
+    }
+    if (qty > availableToSell) {
+      alert(`보유 수량(${availableToSell})을 초과했습니다`);
+      return;
+    }
 
     const success = sellSpot(selectedSymbol, currentPrice, qty);
     if (success) {
       setQuantity('');
+      setSpotTradeType(null);
+      alert(`✅ ${selectedSymbol} 매도 완료!`);
+    } else {
+      alert('❌ 매도 실패');
     }
   };
 
@@ -772,10 +815,15 @@ export function PaperTrading() {
                         <div>
                           <label className="text-sm font-medium mb-2 block">수량</label>
                           <Input
-                            type="number"
+                            type="text"
+                            inputMode="decimal"
                             placeholder="0.00"
                             value={quantity}
-                            onChange={(e) => setQuantity(e.target.value)}
+                            onChange={(e) => {
+                              // 숫자와 소수점만 허용
+                              const val = e.target.value.replace(/[^0-9.]/g, '');
+                              setQuantity(val);
+                            }}
                           />
                           <div className="flex gap-1 mt-2">
                             {[25, 50, 75, 100].map((p) => (
@@ -879,10 +927,14 @@ export function PaperTrading() {
                           </Button>
                         </div>
                         <Input
-                          type="number"
+                          type="text"
+                          inputMode="decimal"
                           placeholder="매수 수량"
                           value={quantity}
-                          onChange={(e) => setQuantity(e.target.value)}
+                          onChange={(e) => {
+                            const val = e.target.value.replace(/[^0-9.]/g, '');
+                            setQuantity(val);
+                          }}
                         />
                         <div className="flex gap-1">
                           {[25, 50, 75, 100].map((p) => (
@@ -949,10 +1001,14 @@ export function PaperTrading() {
                           </div>
                         </div>
                         <Input
-                          type="number"
+                          type="text"
+                          inputMode="decimal"
                           placeholder="매도 수량"
                           value={quantity}
-                          onChange={(e) => setQuantity(e.target.value)}
+                          onChange={(e) => {
+                            const val = e.target.value.replace(/[^0-9.]/g, '');
+                            setQuantity(val);
+                          }}
                         />
                         <div className="flex gap-1">
                           {[25, 50, 75, 100].map((p) => (

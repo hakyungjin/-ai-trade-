@@ -626,3 +626,5 @@ python scripts/train_lstm.py
 - **리스크 관리**: 포지션 크기 조절
 
 
+
+

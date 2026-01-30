@@ -10,4 +10,13 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  server: {
+    proxy: {
+      '/api': {
+        target: 'https://crypto-backend-162307894443.asia-northeast3.run.app',
+        changeOrigin: true,
+        rewrite: (path) => path
+      }
+    }
+  }
 })

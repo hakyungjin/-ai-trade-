@@ -4,29 +4,27 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import trading, ai_signal, settings, realtime, signals, admin, market, realtime_chart, data, coins
+from app.api.stocks import stocks
 from app.config import get_settings
 from app.database import init_db, close_db
 from app.services.binance_stream import binance_stream_manager
 from app.services.binance_service import BinanceService
 from app.services.batch_candle_collector import BatchCandleCollector
-from app.services.smart_candle_scheduler import SmartCandleScheduler, init_scheduler
 
 logger = logging.getLogger(__name__)
 
-# 배치 수집기 인스턴스 (레거시 - 향후 제거 예정)
+# 배치 수집기 인스턴스
 batch_collector: BatchCandleCollector = None
-# 스마트 스케줄러 인스턴스
-smart_scheduler: SmartCandleScheduler = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """앱 시작/종료 시 DB 연결 및 스트림 관리"""
-    global batch_collector, smart_scheduler
+    global batch_collector
     
     await init_db()
     
-    # 바이낸스 서비스 초기화
+    # 배치 캔들 수집기 초기화 및 시작
     try:
         config = get_settings()
         binance = BinanceService(
@@ -34,25 +32,18 @@ async def lifespan(app: FastAPI):
             secret_key=config.binance_secret_key,
             testnet=config.binance_testnet
         )
+        batch_collector = BatchCandleCollector(binance)
         
-        # 🚀 스마트 스케줄러 초기화 및 시작 (권장)
-        smart_scheduler = init_scheduler(binance)
-        asyncio.create_task(delayed_scheduler_start(smart_scheduler, delay=5))
-        logger.info("✅ Smart candle scheduler initialized")
-        
-        # 레거시 배치 수집기 (비활성화 - 스마트 스케줄러로 대체)
-        # batch_collector = BatchCandleCollector(binance)
-        # asyncio.create_task(delayed_collection_start(batch_collector, delay=5))
-        # logger.info("✅ Batch candle collector initialized")
-        
+        # 백그라운드 작업으로 주기적 수집 시작 (1시간마다)
+        # 앱이 시작되면 첫 수집은 지연시키기 (5초 후)
+        asyncio.create_task(delayed_collection_start(batch_collector, delay=5))
+        logger.info("✅ Batch candle collector initialized")
     except Exception as e:
-        logger.error(f"❌ Error initializing scheduler: {e}")
+        logger.error(f"❌ Error initializing batch collector: {e}")
     
     yield
     
     # 종료 시
-    if smart_scheduler:
-        await smart_scheduler.stop()
     if batch_collector:
         batch_collector.stop_periodic_collection()
     await binance_stream_manager.shutdown()
@@ -60,7 +51,7 @@ async def lifespan(app: FastAPI):
 
 
 async def delayed_collection_start(collector: BatchCandleCollector, delay: int = 5):
-    """지연 후 주기적 수집 시작 (레거시)"""
+    """지연 후 주기적 수집 시작"""
     await asyncio.sleep(delay)
     logger.info("🚀 Starting background candle collection...")
     await collector.start_periodic_collection(
@@ -68,15 +59,6 @@ async def delayed_collection_start(collector: BatchCandleCollector, delay: int =
         limit=500,
         collect_interval_hours=1
     )
-
-
-async def delayed_scheduler_start(scheduler: SmartCandleScheduler, delay: int = 5):
-    """지연 후 스마트 스케줄러 시작"""
-    await asyncio.sleep(delay)
-    logger.info("🚀 Starting smart candle scheduler...")
-    # 주요 타임프레임만 수집 (1h, 4h)
-    # 필요 시 timeframes 리스트에 추가 (예: ["1m", "5m", "15m", "1h", "4h"])
-    await scheduler.start(timeframes=["1h", "4h"])
 
 app = FastAPI(
     title="Crypto AI Trader",
@@ -88,7 +70,13 @@ app = FastAPI(
 # CORS 설정 (React 프론트엔드 연동)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173", "http://localhost:5174"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "https://ai-trader-e69ae.web.app",
+        "https://attract--web.web.app"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -104,6 +92,7 @@ app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
 app.include_router(market.router, prefix="/api/market", tags=["Market"])
 app.include_router(realtime_chart.router, prefix="/api/chart", tags=["Realtime Chart"])
 app.include_router(coins.router)  # coins API는 /api/v1/coins 접두사 포함
+app.include_router(stocks.router)  # stocks API는 /api/v1/stocks 접두사 포함
 app.include_router(data.router)
 
 

@@ -6,21 +6,26 @@ import {
   BarChart3,
   Sparkles,
   Plus,
-  Trash2,
   Search,
   Loader,
   X,
   ChevronRight,
   Coins,
   LineChart,
+  Brain,
+  Target,
+  Activity,
+  Award,
+  AlertCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Input } from '@/components/ui/input';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
-import { marketApi, aiApi, apiClient } from '@/api/client';
+import { marketApi, aiApi, apiClient, feedbackApi, modelApi } from '@/api/client';
 import { PriceChart } from './market';
 import { useTradingStore } from '@/store/tradingStore';
 
@@ -51,7 +56,35 @@ interface WeightedAnalysis {
   ai_prediction?: {
     signal: string;
     confidence: number;
+    analysis?: string;
   };
+}
+
+// interface ModelInfo {
+//   name: string;
+//   type: 'XGBoost' | 'LSTM' | 'Ensemble';
+//   classes: number;
+//   features: number;
+//   lastUpdated?: string;
+// }
+
+interface ModelAccuracy {
+  period_days: number;
+  total_trades: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  ai_predictions: number;
+  ai_correct: number;
+  ai_accuracy: number;
+  total_pnl: number;
+  avg_pnl_percent: number;
+}
+
+interface SignalStats {
+  BUY: { count: number; wins: number; win_rate: number; total_pnl: number; avg_pnl: number };
+  SELL: { count: number; wins: number; win_rate: number; total_pnl: number; avg_pnl: number };
+  HOLD: { count: number; wins: number; win_rate: number; total_pnl: number; avg_pnl: number };
 }
 
 export function CoinAnalysis() {
@@ -85,6 +118,16 @@ export function CoinAnalysis() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [addLoading, setAddLoading] = useState(false);
 
+  // 모델 성능 탭
+  const [activeTab, setActiveTab] = useState<'analysis' | 'model'>('analysis');
+  const [modelAccuracy, setModelAccuracy] = useState<ModelAccuracy | null>(null);
+  const [signalStats, setSignalStats] = useState<SignalStats | null>(null);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [modelLoading, setModelLoading] = useState(false);
+  // const [modelExists, setModelExists] = useState<boolean | null>(null);
+  const [trainingStatus, setTrainingStatus] = useState<{status: string; step?: string; progress?: number} | null>(null);
+  const [isTraining, setIsTraining] = useState(false);
+
   // 모니터링 코인 로드
   const loadMonitoredCoins = async () => {
     try {
@@ -102,6 +145,105 @@ export function CoinAnalysis() {
       console.error('Failed to load monitored coins:', error);
     }
   };
+
+  // 모델 학습 시작
+  const handleStartTraining = async () => {
+    setIsTraining(true);
+    try {
+      await modelApi.autoTrain(selectedSymbol, '5m', 10000, marketType);
+      // 상태 폴링 시작
+      pollTrainingStatus();
+    } catch (error) {
+      console.error('Failed to start training:', error);
+      setIsTraining(false);
+    }
+  };
+
+  // 학습 상태 폴링
+  const pollTrainingStatus = () => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await modelApi.getStatus(selectedSymbol);
+        setTrainingStatus(res.data);
+        
+        if (res.data.status === 'completed' || res.data.status === 'error' || res.data.status === 'idle') {
+          clearInterval(interval);
+          setIsTraining(false);
+          if (res.data.status === 'completed') {
+            loadModelPerformance(); // 완료 시 새로고침
+          }
+        }
+      } catch {
+        clearInterval(interval);
+        setIsTraining(false);
+      }
+    }, 3000);
+  };
+
+  // 모델 성능 데이터 로드
+  const loadModelPerformance = async () => {
+    setModelLoading(true);
+    try {
+      // 모델 존재 여부 확인
+      // try {
+      //   const modelCheck = await modelApi.checkModel(selectedSymbol, '5m');
+      //   setModelExists(modelCheck.data?.exists || false);
+      // } catch {
+      //   setModelExists(false);
+      // }
+
+      // 사용 가능한 모델 목록
+      const modelsRes = await aiApi.getModels();
+      setAvailableModels(modelsRes.data.models || []);
+      
+      // 피드백 기반 정확도
+      try {
+        const accuracyRes = await feedbackApi.getAccuracy(selectedSymbol, 30);
+        // error 필드가 있거나 total_trades가 0이면 null 처리
+        if (accuracyRes.data?.error || accuracyRes.data?.total_trades === 0) {
+          setModelAccuracy(null);
+        } else {
+          setModelAccuracy(accuracyRes.data);
+        }
+      } catch {
+        setModelAccuracy(null);
+      }
+      
+      // 신호별 성과
+      try {
+        const statsRes = await feedbackApi.getStatsBySignal(selectedSymbol, 30);
+        setSignalStats(statsRes.data);
+      } catch {
+        setSignalStats(null);
+      }
+    } catch (error) {
+      console.error('Failed to load model performance:', error);
+    } finally {
+      setModelLoading(false);
+    }
+  };
+
+  // 심볼 변경 시 모델 성능 데이터 리셋
+  useEffect(() => {
+    setModelAccuracy(null);
+    setSignalStats(null);
+    setAvailableModels([]);
+    // setModelExists(null);
+    setTrainingStatus(null);
+    setIsTraining(false);
+    
+    // 모델 탭이 열려있으면 바로 로드
+    if (activeTab === 'model') {
+      loadModelPerformance();
+    }
+  }, [selectedSymbol]);
+
+  // 탭 변경 시 모델 데이터 로드
+  useEffect(() => {
+    if (activeTab === 'model') {
+      loadModelPerformance();
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     loadMonitoredCoins();
@@ -275,7 +417,7 @@ export function CoinAnalysis() {
             코인 추가
           </Button>
           <Button
-            onClick={fetchData}
+            onClick={() => fetchData(selectedSymbol, marketType)}
             variant="outline"
             size="sm"
             disabled={loading}
@@ -368,37 +510,52 @@ export function CoinAnalysis() {
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* 메인 컨텐츠 */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* 현재가 */}
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-sm text-muted-foreground flex items-center gap-2">
-                    {selectedSymbol}
-                    <Badge variant="outline" className={marketType === 'spot' ? 'text-blue-600' : 'text-orange-500'}>
-                      {marketType === 'spot' ? '현물' : '선물'}
+      {/* 탭 선택 */}
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'analysis' | 'model')}>
+        <TabsList className="grid w-full grid-cols-2 max-w-md">
+          <TabsTrigger value="analysis" className="flex items-center gap-2">
+            <BarChart3 className="w-4 h-4" />
+            분석
+          </TabsTrigger>
+          <TabsTrigger value="model" className="flex items-center gap-2">
+            <Brain className="w-4 h-4" />
+            모델 성능
+          </TabsTrigger>
+        </TabsList>
+
+        {/* 분석 탭 */}
+        <TabsContent value="analysis" className="mt-4">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* 메인 컨텐츠 */}
+            <div className="lg:col-span-2 space-y-6">
+              {/* 현재가 */}
+              <Card>
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-sm text-muted-foreground flex items-center gap-2">
+                        {selectedSymbol}
+                        <Badge variant="outline" className={marketType === 'spot' ? 'text-blue-600' : 'text-orange-500'}>
+                          {marketType === 'spot' ? '현물' : '선물'}
+                        </Badge>
+                      </div>
+                      <div className="text-3xl font-bold">
+                        ${currentPrice.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                      </div>
+                    </div>
+                    <Badge
+                      variant={priceChange >= 0 ? 'default' : 'destructive'}
+                      className="text-lg py-1 px-3"
+                    >
+                      {priceChange >= 0 ? '+' : ''}{priceChange.toFixed(2)}%
                     </Badge>
                   </div>
-                  <div className="text-3xl font-bold">
-                    ${currentPrice.toLocaleString(undefined, { maximumFractionDigits: 4 })}
-                  </div>
-                </div>
-                <Badge
-                  variant={priceChange >= 0 ? 'default' : 'destructive'}
-                  className="text-lg py-1 px-3"
-                >
-                  {priceChange >= 0 ? '+' : ''}{priceChange.toFixed(2)}%
-                </Badge>
-              </div>
-            </CardContent>
-          </Card>
+                </CardContent>
+              </Card>
 
-          {/* 차트 */}
-          <PriceChart symbol={selectedSymbol} marketType={marketType} />
-        </div>
+              {/* 차트 */}
+              <PriceChart symbol={selectedSymbol} marketType={marketType} />
+            </div>
 
         {/* 분석 패널 */}
         <div className="space-y-6">
@@ -624,7 +781,331 @@ export function CoinAnalysis() {
             </CardContent>
           </Card>
         </div>
-      </div>
+        </div>
+        </TabsContent>
+
+        {/* 모델 성능 탭 */}
+        <TabsContent value="model" className="mt-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* 사용 가능한 모델 */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <Brain className="w-5 h-5 text-purple-600" />
+                  {selectedSymbol} AI 모델
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {modelLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader className="w-8 h-8 animate-spin" />
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {availableModels.filter(m => 
+                      typeof m === 'string' && m.toLowerCase().includes(selectedSymbol.toLowerCase().replace('usdt', ''))
+                    ).length > 0 ? (
+                      availableModels.filter(m => 
+                        typeof m === 'string' && m.toLowerCase().includes(selectedSymbol.toLowerCase().replace('usdt', ''))
+                      ).map((model) => (
+                        <div key={String(model)} className="p-3 rounded-lg border bg-muted/30">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              {String(model).includes('xgboost') && (
+                                <Badge variant="outline" className="bg-green-500/10 text-green-600">XGBoost</Badge>
+                              )}
+                              {String(model).includes('lstm') && (
+                                <Badge variant="outline" className="bg-blue-500/10 text-blue-600">LSTM</Badge>
+                              )}
+                              <span className="font-mono text-sm">{String(model)}</span>
+                            </div>
+                            <Badge variant="secondary">활성</Badge>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-center py-8">
+                        <AlertCircle className="w-12 h-12 mx-auto mb-3 text-yellow-500" />
+                        <p className="text-lg font-medium mb-2">{selectedSymbol} 모델이 아직 없습니다</p>
+                        <p className="text-sm text-muted-foreground mb-4">
+                          데이터 수집 후 AI 모델을 학습해야 예측이 가능합니다
+                        </p>
+                        
+                        {isTraining ? (
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-center gap-2">
+                              <Loader className="w-5 h-5 animate-spin text-blue-500" />
+                              <span className="text-blue-600 font-medium">
+                                {trainingStatus?.step || '학습 준비 중...'}
+                              </span>
+                            </div>
+                            {trainingStatus?.progress !== undefined && (
+                              <Progress value={trainingStatus.progress} className="w-48 mx-auto" />
+                            )}
+                          </div>
+                        ) : (
+                          <Button
+                            onClick={handleStartTraining}
+                            className="bg-gradient-to-r from-purple-500 to-blue-500 hover:from-purple-600 hover:to-blue-600"
+                          >
+                            <Sparkles className="w-4 h-4 mr-2" />
+                            자동 학습 시작
+                          </Button>
+                        )}
+                        
+                        <div className="mt-4 text-xs text-muted-foreground">
+                          약 3-5분 소요 (데이터 수집 → 피처 생성 → 모델 학습)
+                        </div>
+                      </div>
+                    )}
+                    
+                    {/* 전체 모델 수 */}
+                    <div className="pt-3 border-t text-sm text-muted-foreground">
+                      전체 모델: {availableModels.length}개
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* 실거래 기반 정확도 */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <Target className="w-5 h-5 text-blue-600" />
+                  실거래 기반 성과 (30일)
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {modelLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader className="w-8 h-8 animate-spin" />
+                  </div>
+                ) : modelAccuracy && modelAccuracy.total_trades > 0 ? (
+                  <div className="space-y-4">
+                    {/* 전체 승률 */}
+                    <div>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span>승률</span>
+                        <span className="font-bold">{modelAccuracy.win_rate.toFixed(1)}%</span>
+                      </div>
+                      <Progress value={modelAccuracy.win_rate} className="h-3" />
+                      <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                        <span>승리: {modelAccuracy.wins}</span>
+                        <span>패배: {modelAccuracy.losses}</span>
+                      </div>
+                    </div>
+
+                    {/* AI 예측 정확도 */}
+                    {modelAccuracy.ai_predictions > 0 && (
+                      <div>
+                        <div className="flex justify-between text-sm mb-1">
+                          <span>AI 예측 정확도</span>
+                          <span className={cn(
+                            'font-bold',
+                            modelAccuracy.ai_accuracy >= 55 ? 'text-green-600' : 'text-yellow-600'
+                          )}>
+                            {modelAccuracy.ai_accuracy.toFixed(1)}%
+                          </span>
+                        </div>
+                        <Progress 
+                          value={modelAccuracy.ai_accuracy} 
+                          className={cn(
+                            'h-3',
+                            modelAccuracy.ai_accuracy >= 55 ? '[&>div]:bg-green-500' : '[&>div]:bg-yellow-500'
+                          )} 
+                        />
+                        <div className="text-xs text-muted-foreground mt-1">
+                          {modelAccuracy.ai_correct} / {modelAccuracy.ai_predictions} 예측 적중
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 총 수익 */}
+                    <div className="p-3 rounded-lg bg-muted/30">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">총 수익</span>
+                        <span className={cn(
+                          'font-bold',
+                          modelAccuracy.total_pnl >= 0 ? 'text-green-600' : 'text-red-600'
+                        )}>
+                          {modelAccuracy.total_pnl >= 0 ? '+' : ''}{modelAccuracy.total_pnl.toFixed(2)} USDT
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-sm mt-1">
+                        <span className="text-muted-foreground">평균 수익률</span>
+                        <span>{modelAccuracy.avg_pnl_percent.toFixed(2)}%</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Activity className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                    <p>거래 기록이 없습니다</p>
+                    <p className="text-sm mt-1">거래 후 피드백이 기록됩니다</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* 신호별 성과 */}
+            <Card className="lg:col-span-2">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <Award className="w-5 h-5 text-amber-600" />
+                  AI 신호별 성과
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {modelLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader className="w-8 h-8 animate-spin" />
+                  </div>
+                ) : signalStats && (signalStats.BUY || signalStats.SELL || signalStats.HOLD) ? (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    {/* BUY 신호 */}
+                    <div className="p-4 rounded-lg border bg-green-500/5 border-green-500/30">
+                      <div className="flex items-center gap-2 mb-3">
+                        <TrendingUp className="w-5 h-5 text-green-600" />
+                        <span className="font-semibold">BUY 신호</span>
+                      </div>
+                      {signalStats.BUY?.count > 0 ? (
+                        <div className="space-y-2 text-sm">
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">거래 수</span>
+                            <span className="font-bold">{signalStats.BUY.count}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">승률</span>
+                            <span className={cn(
+                              'font-bold',
+                              signalStats.BUY.win_rate >= 50 ? 'text-green-600' : 'text-red-600'
+                            )}>
+                              {signalStats.BUY.win_rate.toFixed(1)}%
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">평균 수익</span>
+                            <span className={cn(
+                              'font-bold',
+                              signalStats.BUY.avg_pnl >= 0 ? 'text-green-600' : 'text-red-600'
+                            )}>
+                              {signalStats.BUY.avg_pnl >= 0 ? '+' : ''}{signalStats.BUY.avg_pnl.toFixed(2)}
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-muted-foreground text-sm">데이터 없음</p>
+                      )}
+                    </div>
+
+                    {/* SELL 신호 */}
+                    <div className="p-4 rounded-lg border bg-red-500/5 border-red-500/30">
+                      <div className="flex items-center gap-2 mb-3">
+                        <TrendingDown className="w-5 h-5 text-red-600" />
+                        <span className="font-semibold">SELL 신호</span>
+                      </div>
+                      {signalStats.SELL?.count > 0 ? (
+                        <div className="space-y-2 text-sm">
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">거래 수</span>
+                            <span className="font-bold">{signalStats.SELL.count}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">승률</span>
+                            <span className={cn(
+                              'font-bold',
+                              signalStats.SELL.win_rate >= 50 ? 'text-green-600' : 'text-red-600'
+                            )}>
+                              {signalStats.SELL.win_rate.toFixed(1)}%
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">평균 수익</span>
+                            <span className={cn(
+                              'font-bold',
+                              signalStats.SELL.avg_pnl >= 0 ? 'text-green-600' : 'text-red-600'
+                            )}>
+                              {signalStats.SELL.avg_pnl >= 0 ? '+' : ''}{signalStats.SELL.avg_pnl.toFixed(2)}
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-muted-foreground text-sm">데이터 없음</p>
+                      )}
+                    </div>
+
+                    {/* HOLD 신호 */}
+                    <div className="p-4 rounded-lg border bg-gray-500/5 border-gray-500/30">
+                      <div className="flex items-center gap-2 mb-3">
+                        <Activity className="w-5 h-5 text-gray-600" />
+                        <span className="font-semibold">HOLD 신호</span>
+                      </div>
+                      {signalStats.HOLD?.count > 0 ? (
+                        <div className="space-y-2 text-sm">
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">거래 수</span>
+                            <span className="font-bold">{signalStats.HOLD.count}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">승률</span>
+                            <span className={cn(
+                              'font-bold',
+                              signalStats.HOLD.win_rate >= 50 ? 'text-green-600' : 'text-red-600'
+                            )}>
+                              {signalStats.HOLD.win_rate.toFixed(1)}%
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">평균 수익</span>
+                            <span className={cn(
+                              'font-bold',
+                              signalStats.HOLD.avg_pnl >= 0 ? 'text-green-600' : 'text-red-600'
+                            )}>
+                              {signalStats.HOLD.avg_pnl >= 0 ? '+' : ''}{signalStats.HOLD.avg_pnl.toFixed(2)}
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-muted-foreground text-sm">데이터 없음</p>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Award className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                    <p>신호별 성과 데이터가 없습니다</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* 모델 개선 안내 */}
+            <Card className="lg:col-span-2 bg-gradient-to-r from-purple-500/10 to-blue-500/10 border-purple-500/30">
+              <CardContent className="p-6">
+                <div className="flex items-start gap-4">
+                  <div className="p-3 rounded-full bg-purple-500/20">
+                    <Sparkles className="w-6 h-6 text-purple-600" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-lg mb-2">💡 모델 개선하기</h3>
+                    <p className="text-muted-foreground mb-3">
+                      거래 결과가 쌓이면 피드백 데이터로 모델을 재학습할 수 있습니다.
+                    </p>
+                    <div className="bg-muted/50 rounded-lg p-3 font-mono text-sm">
+                      <p className="text-muted-foreground"># 피드백 기반 재학습</p>
+                      <p>python scripts/train_with_feedback.py \</p>
+                      <p className="pl-4">--symbol {selectedSymbol} \</p>
+                      <p className="pl-4">--model models/xgboost_{selectedSymbol.toLowerCase()}_5m_v4.joblib \</p>
+                      <p className="pl-4">--output models/xgboost_{selectedSymbol.toLowerCase()}_5m_v5.joblib</p>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+      </Tabs>
 
       {/* 코인 추가 모달 */}
       {showAddModal && (

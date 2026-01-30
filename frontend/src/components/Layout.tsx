@@ -1,47 +1,68 @@
 import { useState } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
-  Target,
-  BarChart3,
-  Menu,
+  TrendingUp,
   Bot,
+  Menu,
+  BarChart3,
+  Coins,
+  Home as HomeIcon,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { usePaperTradingStore } from '@/store/paperTradingStore';
 
 export function Layout() {
   const [mobileOpen, setMobileOpen] = useState(false);
-  const { positions = [], totalPnl = 0, balance = 10000 } = usePaperTradingStore();
+  const location = useLocation();
   
-  const openPositions = (positions || []).filter((p) => p.status === 'OPEN');
-  const spotPositions = openPositions.filter((p) => p.marketType === 'spot');
-  const futuresPositions = openPositions.filter((p) => p.marketType === 'futures' || !p.marketType);
+  // 경로에 따라 메뉴 변경
+  const isCrypto = location.pathname.startsWith('/crypto');
 
-  const navItems = [
-    { 
-      to: '/', 
-      icon: Target, 
-      label: '모의투자',
-      badge: openPositions.length > 0 ? openPositions.length : undefined,
-      subBadge: openPositions.length > 0 ? `현${spotPositions.length}/선${futuresPositions.length}` : undefined,
-    },
-    { 
-      to: '/analysis', 
-      icon: BarChart3, 
-      label: '코인 분석',
-    },
+  const cryptoNavItems = [
+    { to: '/crypto', icon: Coins, label: '코인 분석' },
+    { to: '/crypto/paper-trading', icon: TrendingUp, label: '페이퍼 트레이딩' },
+    { to: '/crypto/model-prep', icon: Bot, label: '모델 준비' },
   ];
+
+  const stocksNavItems = [
+    { to: '/stocks', icon: BarChart3, label: '주식 분석' },
+    { to: '/stocks/paper-trading', icon: TrendingUp, label: '페이퍼 트레이딩' },
+  ];
+
+  const navItems = isCrypto ? cryptoNavItems : stocksNavItems;
 
   const NavContent = () => (
     <>
       <div className="p-4 border-b border-border">
-        <h1 className="text-xl font-bold text-primary flex items-center gap-2">
-          <Bot className="w-6 h-6" />
-          <span className="hidden sm:inline">Crypto AI Trader</span>
-          <span className="sm:hidden">CAT</span>
+        <div className="flex items-center gap-2 mb-4">
+          <Button 
+            variant="ghost" 
+            size="sm"
+            asChild
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <a href="/">
+              <HomeIcon className="w-4 h-4" />
+              홈으로
+            </a>
+          </Button>
+        </div>
+        <h1 className="text-lg font-bold text-primary flex items-center gap-2">
+          {isCrypto ? (
+            <>
+              <Coins className="w-5 h-5" />
+              <span className="hidden sm:inline">암호화폐</span>
+              <span className="sm:hidden">Crypto</span>
+            </>
+          ) : (
+            <>
+              <BarChart3 className="w-5 h-5" />
+              <span className="hidden sm:inline">미국주식</span>
+              <span className="sm:hidden">Stocks</span>
+            </>
+          )}
         </h1>
       </div>
       <nav className="flex-1 p-4">
@@ -61,48 +82,23 @@ export function Layout() {
                 }
               >
                 <item.icon className="w-5 h-5" />
-                <span className="flex-1">{item.label}</span>
-                <div className="flex items-center gap-1">
-                  {item.badge && (
-                    <Badge variant="secondary" className="text-xs">
-                      {item.badge}
-                    </Badge>
-                  )}
-                  {item.subBadge && (
-                    <span className="text-[10px] text-muted-foreground">
-                      {item.subBadge}
-                    </span>
-                  )}
-                </div>
+                {item.label}
               </NavLink>
             </li>
           ))}
         </ul>
       </nav>
 
-      {/* 계정 요약 */}
-      <div className="p-4 border-t border-border space-y-3">
-        <div className="text-sm">
-          <div className="text-muted-foreground mb-1">잔고</div>
-          <div className="text-lg font-bold">
-            ${balance.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-          </div>
-        </div>
-        <div className="text-sm">
-          <div className="text-muted-foreground mb-1">총 PnL</div>
-          <div className={cn(
-            'text-base font-bold',
-            totalPnl > 0 ? 'text-green-600' : totalPnl < 0 ? 'text-red-600' : ''
-          )}>
-            {totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)}
-          </div>
-        </div>
+      {/* Connection Status */}
+      <div className="p-4 border-t border-border">
         <div className="flex items-center gap-2 text-sm">
           <span className="relative flex h-2 w-2">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
             <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
           </span>
-          <span className="text-muted-foreground">Binance</span>
+          <span className="text-muted-foreground">
+            {isCrypto ? 'Binance' : 'Alpha Vantage'}
+          </span>
           <Badge variant="outline" className="ml-auto text-xs">Live</Badge>
         </div>
       </div>
@@ -110,18 +106,27 @@ export function Layout() {
   );
 
   return (
-    <div className="flex min-h-screen bg-background">
-      {/* Desktop Sidebar - 고정 */}
-      <aside className="hidden md:flex md:w-64 flex-col bg-card border-r border-border fixed top-0 left-0 h-screen z-40">
+    <div className="flex h-screen bg-background">
+      {/* Desktop Sidebar */}
+      <aside className="hidden md:flex md:w-64 flex-col bg-card border-r border-border">
         <NavContent />
       </aside>
 
       {/* Mobile Header & Sheet */}
-      <div className="flex-1 flex flex-col md:ml-64">
-        <header className="md:hidden flex items-center justify-between p-4 border-b border-border bg-card sticky top-0 z-30">
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <header className="md:hidden flex items-center justify-between p-4 border-b border-border bg-card">
           <h1 className="text-lg font-bold text-primary flex items-center gap-2">
-            <Bot className="w-5 h-5" />
-            Crypto AI Trader
+            {isCrypto ? (
+              <>
+                <Coins className="w-5 h-5" />
+                Crypto
+              </>
+            ) : (
+              <>
+                <BarChart3 className="w-5 h-5" />
+                Stocks
+              </>
+            )}
           </h1>
           <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
             <SheetTrigger asChild>
@@ -135,8 +140,8 @@ export function Layout() {
           </Sheet>
         </header>
 
-        {/* Main Content - 브라우저 기본 스크롤 사용 */}
-        <main className="flex-1">
+        {/* Main Content */}
+        <main className="flex-1 overflow-y-auto">
           <Outlet />
         </main>
       </div>

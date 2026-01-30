@@ -1,0 +1,11 @@
+node_modules
+dist
+.git
+.gitignore
+*.md
+.env
+.env.local
+.env.development
+.env.test
+# .env.production은 포함해야 함 (빌드 시 필요)
+

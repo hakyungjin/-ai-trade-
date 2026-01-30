@@ -723,3 +723,312 @@ def check_model_exists(symbol: str, timeframe: str = '5m') -> bool:
     
     return exists
 
+
+# ==================== 앙상블 모델 서비스 ====================
+
+class EnsembleModelService:
+    """XGBoost + LSTM 앙상블 예측 서비스"""
+    
+    def __init__(self, symbol: str, timeframe: str = '5m'):
+        self.symbol = symbol.upper()
+        self.timeframe = timeframe
+        self.xgb_service = None
+        self.lstm_model = None
+        self.lstm_scaler = None
+        self.lstm_features = None
+        self.lstm_seq_length = 20
+        self.is_loaded = False
+        
+        # 가중치: XGBoost는 안정적, LSTM은 패턴 감지에 강함
+        self.xgb_weight = 0.6
+        self.lstm_weight = 0.4
+        
+        self._load_models()
+    
+    def _load_models(self):
+        """모델들 로드"""
+        import os
+        
+        model_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
+            'ai-model', 'models'
+        )
+        
+        # 1. XGBoost 모델 로드
+        self.xgb_service = get_trained_model_service(self.symbol, self.timeframe)
+        xgb_loaded = self.xgb_service and self.xgb_service.is_loaded
+        
+        # 2. LSTM 모델 로드
+        lstm_loaded = self._load_lstm(model_dir)
+        
+        self.is_loaded = xgb_loaded or lstm_loaded
+        
+        if xgb_loaded and lstm_loaded:
+            logger.info(f"🎯 Ensemble ready: XGBoost + LSTM for {self.symbol}")
+        elif xgb_loaded:
+            logger.info(f"📊 XGBoost only for {self.symbol} (LSTM not found)")
+            self.xgb_weight = 1.0
+            self.lstm_weight = 0.0
+        elif lstm_loaded:
+            logger.info(f"🧠 LSTM only for {self.symbol} (XGBoost not found)")
+            self.xgb_weight = 0.0
+            self.lstm_weight = 1.0
+        else:
+            logger.warning(f"⚠️ No models found for {self.symbol}")
+    
+    def _load_lstm(self, model_dir: str) -> bool:
+        """LSTM 모델 로드"""
+        try:
+            import torch
+            import joblib
+            
+            symbol_lower = self.symbol.lower()
+            lstm_path = os.path.join(model_dir, f'lstm_{symbol_lower}_{self.timeframe}.pt')
+            meta_path = os.path.join(model_dir, f'lstm_{symbol_lower}_{self.timeframe}_meta.joblib')
+            
+            if not os.path.exists(lstm_path):
+                logger.info(f"LSTM model not found: {lstm_path}")
+                return False
+            
+            # 메타 정보 로드
+            if os.path.exists(meta_path):
+                meta = joblib.load(meta_path)
+                self.lstm_scaler = meta.get('scaler')
+                self.lstm_features = meta.get('features', self._default_lstm_features())
+                self.lstm_seq_length = meta.get('seq_length', 20)
+                num_classes = meta.get('num_classes', 3)
+            else:
+                self.lstm_features = self._default_lstm_features()
+                num_classes = 3
+            
+            # LSTM 모델 정의 (BiLSTMClassifier)
+            class Attention(torch.nn.Module):
+                def __init__(self, hidden_size):
+                    super().__init__()
+                    self.attention = torch.nn.Sequential(
+                        torch.nn.Linear(hidden_size, hidden_size // 2),
+                        torch.nn.Tanh(),
+                        torch.nn.Linear(hidden_size // 2, 1)
+                    )
+                
+                def forward(self, lstm_output):
+                    attention_weights = self.attention(lstm_output)
+                    attention_weights = torch.softmax(attention_weights, dim=1)
+                    context = torch.sum(lstm_output * attention_weights, dim=1)
+                    return context, attention_weights
+            
+            class BiLSTMClassifier(torch.nn.Module):
+                def __init__(self, input_size, hidden_size=64, num_layers=2, num_classes=3, dropout=0.4):
+                    super().__init__()
+                    self.lstm = torch.nn.LSTM(
+                        input_size=input_size, hidden_size=hidden_size,
+                        num_layers=num_layers, batch_first=True,
+                        bidirectional=True, dropout=dropout if num_layers > 1 else 0
+                    )
+                    self.attention = Attention(hidden_size * 2)
+                    self.bn = torch.nn.BatchNorm1d(hidden_size * 2)
+                    self.fc = torch.nn.Sequential(
+                        torch.nn.Linear(hidden_size * 2, 64),
+                        torch.nn.ReLU(),
+                        torch.nn.Dropout(dropout),
+                        torch.nn.Linear(64, 32),
+                        torch.nn.ReLU(),
+                        torch.nn.Dropout(dropout),
+                        torch.nn.Linear(32, num_classes)
+                    )
+                
+                def forward(self, x):
+                    lstm_out, _ = self.lstm(x)
+                    context, _ = self.attention(lstm_out)
+                    context = self.bn(context)
+                    return self.fc(context)
+            
+            # 모델 로드
+            input_size = len(self.lstm_features)
+            self.lstm_model = BiLSTMClassifier(input_size, num_classes=num_classes)
+            self.lstm_model.load_state_dict(torch.load(lstm_path, map_location='cpu'))
+            self.lstm_model.eval()
+            
+            logger.info(f"✅ LSTM loaded: {lstm_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ LSTM load error: {e}")
+            return False
+    
+    def _default_lstm_features(self):
+        """기본 LSTM 피처 목록"""
+        return [
+            'price_change_1', 'price_change_5', 'price_position', 'price_position_20',
+            'rsi_normalized', 'bb_position', 'stoch_k', 'stoch_d',
+            'macd_normalized', 'ema_cross', 'volume_ma_ratio', 'volume_spike',
+            'obv_slope', 'mfi_normalized', 'williams_r',
+            'volatility_5', 'atr_ratio',
+            'candle_body', 'upper_shadow', 'lower_shadow', 'is_bullish'
+        ]
+    
+    def predict(self, candles: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """앙상블 예측"""
+        if not self.is_loaded:
+            return self._default_response("No models loaded")
+        
+        xgb_proba = None
+        lstm_proba = None
+        
+        # 1. XGBoost 예측
+        if self.xgb_service and self.xgb_service.is_loaded:
+            xgb_result = self.xgb_service.predict(candles)
+            if xgb_result.get('confidence', 0) > 0:
+                xgb_proba = np.array(list(xgb_result.get('probabilities', {}).values()))
+        
+        # 2. LSTM 예측
+        if self.lstm_model is not None:
+            lstm_proba = self._predict_lstm(candles)
+        
+        # 3. 앙상블
+        if xgb_proba is not None and lstm_proba is not None:
+            # 클래스 수 맞추기
+            if len(xgb_proba) != len(lstm_proba):
+                # 다르면 XGBoost 우선
+                ensemble_proba = xgb_proba
+                model_used = "XGBoost (class mismatch)"
+            else:
+                ensemble_proba = self.xgb_weight * xgb_proba + self.lstm_weight * lstm_proba
+                model_used = f"Ensemble (XGB:{self.xgb_weight:.0%} + LSTM:{self.lstm_weight:.0%})"
+        elif xgb_proba is not None:
+            ensemble_proba = xgb_proba
+            model_used = "XGBoost only"
+        elif lstm_proba is not None:
+            ensemble_proba = lstm_proba
+            model_used = "LSTM only"
+        else:
+            return self._default_response("Prediction failed")
+        
+        # 4. 결과 생성
+        pred_class = int(np.argmax(ensemble_proba))
+        confidence = float(ensemble_proba[pred_class])
+        
+        # 레이블 매핑 (클래스 수에 따라)
+        num_classes = len(ensemble_proba)
+        if num_classes == 2:
+            label_map = {0: ('SELL', -1), 1: ('BUY', 1)}
+        elif num_classes == 3:
+            label_map = {0: ('SELL', -1), 1: ('HOLD', 0), 2: ('BUY', 1)}
+        else:
+            label_map = {0: ('STRONG_SELL', -2), 1: ('SELL', -1), 2: ('HOLD', 0), 3: ('BUY', 1), 4: ('STRONG_BUY', 2)}
+        
+        detailed_signal, signal_value = label_map.get(pred_class, ('HOLD', 0))
+        simple_signal = 'BUY' if signal_value > 0 else ('SELL' if signal_value < 0 else 'HOLD')
+        
+        # 확률 딕셔너리
+        prob_dict = {label_map[i][0]: float(ensemble_proba[i]) for i in range(len(ensemble_proba))}
+        
+        # direction 결정
+        direction = 'UP' if signal_value > 0 else ('DOWN' if signal_value < 0 else 'NEUTRAL')
+        
+        return {
+            'signal': simple_signal,
+            'detailed_signal': detailed_signal,
+            'confidence': confidence,
+            'signal_value': signal_value,
+            'direction': direction,  # 추가!
+            'probabilities': prob_dict,
+            'model_used': model_used,
+            'analysis': self._generate_analysis(detailed_signal, confidence, ensemble_proba, model_used)
+        }
+    
+    def _predict_lstm(self, candles: List[Dict[str, Any]]) -> Optional[np.ndarray]:
+        """LSTM 예측"""
+        try:
+            import torch
+            
+            # 데이터프레임 변환
+            df = pd.DataFrame(candles)
+            
+            # 피처 생성 (XGBoost와 동일한 방식)
+            if self.xgb_service and self.xgb_service.is_loaded:
+                df = self.xgb_service._create_features(df)
+            
+            # 필요한 피처만 추출
+            available_features = [f for f in self.lstm_features if f in df.columns]
+            if len(available_features) < len(self.lstm_features) * 0.5:
+                logger.warning("Not enough features for LSTM")
+                return None
+            
+            # NaN 처리
+            df = df[available_features].fillna(0)
+            
+            # 시퀀스 데이터 준비
+            if len(df) < self.lstm_seq_length:
+                logger.warning(f"Not enough candles for LSTM (need {self.lstm_seq_length})")
+                return None
+            
+            # 마지막 시퀀스 추출
+            seq_data = df.iloc[-self.lstm_seq_length:].values
+            
+            # 스케일링
+            if self.lstm_scaler is not None:
+                seq_data = self.lstm_scaler.transform(seq_data)
+            
+            # 텐서 변환
+            X = torch.FloatTensor(seq_data).unsqueeze(0)  # (1, seq_len, features)
+            
+            # 예측
+            with torch.no_grad():
+                output = self.lstm_model(X)
+                proba = torch.softmax(output, dim=1).numpy()[0]
+            
+            return proba
+            
+        except Exception as e:
+            logger.error(f"LSTM prediction error: {e}")
+            return None
+    
+    def _generate_analysis(self, signal: str, confidence: float, proba: np.ndarray, model_used: str) -> str:
+        """분석 텍스트 생성"""
+        parts = []
+        
+        parts.append(f"🎯 {model_used}")
+        
+        if signal in ['BUY', 'STRONG_BUY']:
+            parts.append(f"📈 매수 신호 (신뢰도: {confidence*100:.1f}%)")
+        elif signal in ['SELL', 'STRONG_SELL']:
+            parts.append(f"📉 매도 신호 (신뢰도: {confidence*100:.1f}%)")
+        else:
+            parts.append(f"⏸️ 관망 (신뢰도: {confidence*100:.1f}%)")
+        
+        # 확률 분포
+        if len(proba) == 2:
+            parts.append(f"확률: BUY {proba[1]*100:.1f}% / SELL {proba[0]*100:.1f}%")
+        elif len(proba) == 3:
+            parts.append(f"확률: BUY {proba[2]*100:.1f}% / HOLD {proba[1]*100:.1f}% / SELL {proba[0]*100:.1f}%")
+        
+        return " | ".join(parts)
+    
+    def _default_response(self, reason: str) -> Dict[str, Any]:
+        """기본 응답"""
+        return {
+            'signal': 'HOLD',
+            'detailed_signal': 'HOLD',
+            'confidence': 0.0,
+            'signal_value': 0,
+            'direction': 'NEUTRAL',  # 추가!
+            'probabilities': {'HOLD': 1.0},
+            'model_used': 'None',
+            'analysis': f"⚠️ {reason}"
+        }
+
+
+# 앙상블 서비스 캐시
+_ensemble_cache: Dict[str, EnsembleModelService] = {}
+
+
+def get_ensemble_service(symbol: str, timeframe: str = '5m') -> EnsembleModelService:
+    """앙상블 서비스 인스턴스 가져오기 (캐시)"""
+    cache_key = f"{symbol.upper()}_{timeframe}"
+    
+    if cache_key not in _ensemble_cache:
+        _ensemble_cache[cache_key] = EnsembleModelService(symbol, timeframe)
+    
+    return _ensemble_cache[cache_key]
+

@@ -10,7 +10,9 @@ python-binance>=1.0.19
 
 # Database
 sqlalchemy>=2.0.25
-aiomysql>=0.2.0
+aiomysql>=0.2.0  # MySQL support
+asyncpg>=0.29.0  # PostgreSQL support (for Supabase)
+aiosqlite>=0.19.0  # SQLite support (for data_collector)
 alembic>=1.13.0
 
 # AI/ML

@@ -91,12 +91,22 @@ class CandleBatchSaver:
             for i in range(0, len(batch_data), CandleBatchSaver.BATCH_SIZE):
                 chunk = batch_data[i:i + CandleBatchSaver.BATCH_SIZE]
                 
-                stmt = insert(MarketCandle).values(chunk)
-                # MySQL: IGNORE 중복, PostgreSQL: ON CONFLICT 무시
-                await db_session.execute(stmt)
-                
-                stats['inserted'] += len(chunk)
-                logger.debug(f"📤 Inserted {len(chunk)} candles ({i}/{len(batch_data)})")
+                try:
+                    stmt = insert(MarketCandle).values(chunk)
+                    # PostgreSQL: ON CONFLICT DO NOTHING (중복 무시)
+                    # MySQL: UniqueConstraint가 있으면 자동으로 에러 발생하지만, 이미 중복 체크했으므로 안전
+                    await db_session.execute(stmt)
+                    
+                    stats['inserted'] += len(chunk)
+                    logger.debug(f"📤 Inserted {len(chunk)} candles ({i}/{len(batch_data)})")
+                except Exception as e:
+                    # UniqueConstraint 위반 시 (이미 중복 체크했지만 안전장치)
+                    if 'unique' in str(e).lower() or 'duplicate' in str(e).lower():
+                        logger.warning(f"⚠️  Duplicate detected (already filtered): {e}")
+                        # 이미 중복 체크했으므로 스킵
+                        continue
+                    else:
+                        raise
             
             # 커밋
             await db_session.commit()

@@ -8,15 +8,20 @@ class Settings(BaseSettings):
     binance_secret_key: str = ""
     binance_testnet: bool = True
 
-    # Database (MySQL)
+    # Database (MySQL or PostgreSQL)
+    # MySQL: mysql+aiomysql://user:pass@host:3306/dbname
+    # PostgreSQL: postgresql+asyncpg://user:pass@host:5432/dbname
     database_url: str = "mysql+aiomysql://root:password@localhost:3306/crypto_trader"
     sqlalchemy_url: str = "mysql+aiomysql://root:password@localhost:3306/crypto_trader"
 
     # Gemini AI
     gemini_api_key: str = ""
 
+    # Alpha Vantage API (Stock data)
+    alpha_vantage_api_key: str = ""
+
     # AI Model (기존 PyTorch 모델 - fallback용)
-    model_path: str = "../ai-model/models/price_predictor.pt"
+    model_path: str = "./ai-model/models/price_predictor.pt"
     prediction_threshold: float = 0.6
 
     # Trading Settings
