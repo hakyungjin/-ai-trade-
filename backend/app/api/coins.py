@@ -156,6 +156,59 @@ async def add_monitoring_coin(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/collect/{symbol}")
+async def collect_coin_data(
+    symbol: str,
+    timeframe: str = "1h",
+    target_count: int = 50000,
+    market_type: str = "spot",
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    db: AsyncSession = Depends(get_db)
+):
+    """코인 데이터 수집
+    
+    Parameters:
+    - symbol: 코인 심볼 (e.g., BTCUSDT)
+    - timeframe: 캔들 시간 간격 (1m, 5m, 15m, 1h, 4h, 1d)
+    - target_count: 수집할 캔들 개수 (기본값: 50000)
+    - market_type: spot 또는 futures (기본값: spot)
+    """
+    try:
+        logger.info(f"📊 데이터 수집 시작: {symbol} {timeframe} ({market_type}) - 목표: {target_count}개")
+        
+        # 데이터 수집 작업을 백그라운드에서 실행
+        async def collect_task():
+            try:
+                result = await ModelTrainingService.collect_historical_data(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    target_count=target_count,
+                    market_type=market_type
+                )
+                logger.info(f"✅ {symbol} {timeframe} 데이터 수집 완료: {result}")
+            except Exception as e:
+                logger.error(f"❌ {symbol} {timeframe} 데이터 수집 실패: {str(e)}")
+                raise
+        
+        background_tasks.add_task(collect_task)
+        
+        return {
+            "success": True,
+            "message": f"Data collection started for {symbol}",
+            "data": {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "target_count": target_count,
+                "market_type": market_type,
+                "status": "in_progress",
+                "description": f"수집 중: {symbol} {timeframe} ({market_type}) - 목표 {target_count}개"
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error collecting data for {symbol}: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 # 백그라운드 작업: 코인 분석 워크플로우
 async def _coin_analysis_workflow(symbol: str, timeframes: List[str]):
     """

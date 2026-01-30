@@ -127,40 +127,52 @@ async def search_symbols(query: str = Query(..., min_length=1)):
     """
     심볼 검색
     """
-    binance = get_binance_service()
-    symbols = await binance.search_symbols(query)
+    try:
+        logger.info(f"🔍 심볼 검색 시작: {query}")
+        binance = get_binance_service()
+        symbols = await binance.search_symbols(query)
+        logger.info(f"✅ 검색된 심볼: {len(symbols)}개 - {symbols}")
 
-    # 검색된 심볼들의 티커 정보도 함께 가져오기
-    if symbols:
-        tickers = await binance.get_ticker_24h()
-        ticker_map = {t["symbol"]: t for t in tickers}
+        # 검색된 심볼들의 티커 정보도 함께 가져오기
+        if symbols:
+            tickers = await binance.get_ticker_24h()
+            ticker_map = {t["symbol"]: t for t in tickers}
 
-        results = []
-        for s in symbols:
-            ticker = ticker_map.get(s["symbol"])
-            if ticker:
-                results.append({
-                    **s,
-                    "price": ticker["price"],
-                    "priceChange": ticker["priceChange"],
-                    "priceChangePercent": ticker["priceChangePercent"],
-                    "volume": ticker["quoteVolume"],
-                    "trend": "up" if ticker["priceChangePercent"] > 0 else "down" if ticker["priceChangePercent"] < 0 else "neutral"
-                })
+            results = []
+            for s in symbols:
+                ticker = ticker_map.get(s["symbol"])
+                if ticker:
+                    results.append({
+                        **s,
+                        "price": ticker["price"],
+                        "priceChange": ticker["priceChange"],
+                        "priceChangePercent": ticker["priceChangePercent"],
+                        "volume": ticker["quoteVolume"],
+                        "trend": "up" if ticker["priceChangePercent"] > 0 else "down" if ticker["priceChangePercent"] < 0 else "neutral"
+                    })
+
+            return {
+                "success": True,
+                "data": results,
+                "total": len(results),
+                "timestamp": datetime.now().isoformat()
+            }
 
         return {
             "success": True,
-            "data": results,
-            "total": len(results),
+            "data": [],
+            "total": 0,
             "timestamp": datetime.now().isoformat()
         }
-
-    return {
-        "success": True,
-        "data": [],
-        "total": 0,
-        "timestamp": datetime.now().isoformat()
-    }
+    except Exception as e:
+        logger.error(f"❌ 심볼 검색 오류: {str(e)}", exc_info=True)
+        return {
+            "success": False,
+            "data": [],
+            "total": 0,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
 
 
 @router.get("/search/all")
