@@ -3,6 +3,7 @@ from app.models.trade import Trade
 from app.models.vector_pattern import VectorPattern, VectorSimilarity
 from app.models.strategy_weights import StrategyWeights
 from app.models.coin import Coin, CoinStatistics, CoinAnalysisConfig, CoinPriceHistory
+from app.models.trained_model import TrainedModel
 
 __all__ = [
     'MarketCandle',
@@ -18,4 +19,5 @@ __all__ = [
     'CoinStatistics',
     'CoinAnalysisConfig',
     'CoinPriceHistory',
+    'TrainedModel',
 ]
