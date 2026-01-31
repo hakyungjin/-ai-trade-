@@ -440,3 +440,106 @@ async def _stock_analysis_workflow(symbol: str, timeframes: List[str]):
         
     except Exception as e:
         logger.error(f"❌ Stock analysis workflow error for {symbol}: {str(e)}")
+
+
+# ===== Stock Search API =====
+
+# Popular US stocks list (S&P 500 top stocks)
+POPULAR_STOCKS = [
+    {"symbol": "AAPL", "name": "Apple Inc.", "sector": "Technology"},
+    {"symbol": "MSFT", "name": "Microsoft Corporation", "sector": "Technology"},
+    {"symbol": "GOOGL", "name": "Alphabet Inc. Class A", "sector": "Technology"},
+    {"symbol": "GOOG", "name": "Alphabet Inc. Class C", "sector": "Technology"},
+    {"symbol": "AMZN", "name": "Amazon.com Inc.", "sector": "Consumer Cyclical"},
+    {"symbol": "NVDA", "name": "NVIDIA Corporation", "sector": "Technology"},
+    {"symbol": "META", "name": "Meta Platforms Inc.", "sector": "Technology"},
+    {"symbol": "TSLA", "name": "Tesla Inc.", "sector": "Consumer Cyclical"},
+    {"symbol": "BRK.B", "name": "Berkshire Hathaway Inc. Class B", "sector": "Financial Services"},
+    {"symbol": "LLY", "name": "Eli Lilly and Company", "sector": "Healthcare"},
+    {"symbol": "V", "name": "Visa Inc.", "sector": "Financial Services"},
+    {"symbol": "UNH", "name": "UnitedHealth Group Incorporated", "sector": "Healthcare"},
+    {"symbol": "XOM", "name": "Exxon Mobil Corporation", "sector": "Energy"},
+    {"symbol": "JPM", "name": "JPMorgan Chase & Co.", "sector": "Financial Services"},
+    {"symbol": "JNJ", "name": "Johnson & Johnson", "sector": "Healthcare"},
+    {"symbol": "MA", "name": "Mastercard Incorporated", "sector": "Financial Services"},
+    {"symbol": "PG", "name": "The Procter & Gamble Company", "sector": "Consumer Defensive"},
+    {"symbol": "AVGO", "name": "Broadcom Inc.", "sector": "Technology"},
+    {"symbol": "HD", "name": "The Home Depot Inc.", "sector": "Consumer Cyclical"},
+    {"symbol": "CVX", "name": "Chevron Corporation", "sector": "Energy"},
+    {"symbol": "ABBV", "name": "AbbVie Inc.", "sector": "Healthcare"},
+    {"symbol": "MRK", "name": "Merck & Co. Inc.", "sector": "Healthcare"},
+    {"symbol": "COST", "name": "Costco Wholesale Corporation", "sector": "Consumer Defensive"},
+    {"symbol": "KO", "name": "The Coca-Cola Company", "sector": "Consumer Defensive"},
+    {"symbol": "PEP", "name": "PepsiCo Inc.", "sector": "Consumer Defensive"},
+    {"symbol": "ADBE", "name": "Adobe Inc.", "sector": "Technology"},
+    {"symbol": "TMO", "name": "Thermo Fisher Scientific Inc.", "sector": "Healthcare"},
+    {"symbol": "NFLX", "name": "Netflix Inc.", "sector": "Communication Services"},
+    {"symbol": "WMT", "name": "Walmart Inc.", "sector": "Consumer Defensive"},
+    {"symbol": "CRM", "name": "Salesforce Inc.", "sector": "Technology"},
+    {"symbol": "BAC", "name": "Bank of America Corporation", "sector": "Financial Services"},
+    {"symbol": "ORCL", "name": "Oracle Corporation", "sector": "Technology"},
+    {"symbol": "AMD", "name": "Advanced Micro Devices Inc.", "sector": "Technology"},
+    {"symbol": "CSCO", "name": "Cisco Systems Inc.", "sector": "Technology"},
+    {"symbol": "ACN", "name": "Accenture plc", "sector": "Technology"},
+    {"symbol": "NKE", "name": "NIKE Inc.", "sector": "Consumer Cyclical"},
+    {"symbol": "TXN", "name": "Texas Instruments Incorporated", "sector": "Technology"},
+    {"symbol": "LIN", "name": "Linde plc", "sector": "Basic Materials"},
+    {"symbol": "QCOM", "name": "QUALCOMM Incorporated", "sector": "Technology"},
+    {"symbol": "ABT", "name": "Abbott Laboratories", "sector": "Healthcare"},
+    {"symbol": "INTC", "name": "Intel Corporation", "sector": "Technology"},
+    {"symbol": "CMCSA", "name": "Comcast Corporation", "sector": "Communication Services"},
+    {"symbol": "DHR", "name": "Danaher Corporation", "sector": "Healthcare"},
+    {"symbol": "PM", "name": "Philip Morris International Inc.", "sector": "Consumer Defensive"},
+    {"symbol": "VZ", "name": "Verizon Communications Inc.", "sector": "Communication Services"},
+    {"symbol": "WFC", "name": "Wells Fargo & Company", "sector": "Financial Services"},
+    {"symbol": "DIS", "name": "The Walt Disney Company", "sector": "Communication Services"},
+    {"symbol": "INTU", "name": "Intuit Inc.", "sector": "Technology"},
+    {"symbol": "CAT", "name": "Caterpillar Inc.", "sector": "Industrials"},
+    {"symbol": "IBM", "name": "International Business Machines Corporation", "sector": "Technology"},
+]
+
+
+@router.get("/search")
+async def search_stocks(query: str, limit: int = 20):
+    """Search stocks by symbol or name"""
+    try:
+        query_upper = query.upper().strip()
+
+        if not query_upper:
+            return {
+                "success": True,
+                "symbols": POPULAR_STOCKS[:limit]
+            }
+
+        # Filter stocks by symbol or name
+        results = []
+        for stock in POPULAR_STOCKS:
+            if (query_upper in stock["symbol"].upper() or
+                query_upper in stock["name"].upper()):
+                results.append({
+                    "symbol": stock["symbol"],
+                    "baseAsset": stock["symbol"],
+                    "quoteAsset": "USD",
+                    "name": stock["name"],
+                    "sector": stock["sector"],
+                    "price": 0,  # Will be fetched from Alpha Vantage when added
+                    "priceChange": 0,
+                    "priceChangePercent": 0,
+                    "volume": 0,
+                    "marketCap": 0,
+                    "trend": "neutral"
+                })
+
+        logger.info(f"✅ Stock search: {query} → {len(results)} results")
+        return {
+            "success": True,
+            "symbols": results[:limit]
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Stock search failed: {str(e)}")
+        return {
+            "success": False,
+            "symbols": [],
+            "error": str(e)
+        }

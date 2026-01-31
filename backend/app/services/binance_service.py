@@ -394,35 +394,55 @@ class BinanceService:
         
         return symbols
 
-    async def search_symbols_advanced(self, query: str, quote_asset: str = "USDT", limit: int = 100) -> List[Dict[str, Any]]:
-        """고급 심볼 검색 (쿼트 자산 지정 가능)"""
-        info = await self.get_exchange_info()
-        tickers = await self.get_ticker_24h()
+    async def search_symbols_advanced(self, query: str, quote_asset: str = "USDT", limit: int = 100, market_type: MarketType = 'spot') -> List[Dict[str, Any]]:
+        """고급 심볼 검색 (현물/선물 구분, 쿼트 자산 지정 가능)"""
+        if market_type == 'futures':
+            # 선물 검색
+            info = await self._run_sync(self.market_client.futures_exchange_info)
+            tickers = await self._run_sync(self.market_client.futures_ticker)
+        else:
+            # 현물 검색
+            info = await self.get_exchange_info()
+            tickers = await self.get_ticker_24h()
+
         ticker_map = {t["symbol"]: t for t in tickers}
-        
+
         query_upper = query.upper()
         symbols = []
-        
+
         for s in info["symbols"]:
+            # 선물과 현물의 필드 차이 처리
+            status = s.get("status") if market_type == 'spot' else s.get("contractStatus")
+            quote_asset_field = s.get("quoteAsset") if market_type == 'spot' else s.get("quoteAsset", "USDT")
+            base_asset_field = s.get("baseAsset") if market_type == 'spot' else s.get("baseAsset", s.get("symbol", "").replace("USDT", ""))
+
             # 필터링: TRADING 상태, 지정된 쿼트 자산, 검색어 매칭
-            if (s["status"] == "TRADING" and 
-                s["quoteAsset"] == quote_asset and
-                (query_upper in s["symbol"] or query_upper in s["baseAsset"])):
-                
+            trading_status = status in ["TRADING"] if market_type == 'spot' else status == "TRADING"
+
+            if (trading_status and
+                quote_asset_field == quote_asset and
+                (query_upper in s["symbol"] or query_upper in base_asset_field)):
+
                 ticker = ticker_map.get(s["symbol"])
                 if ticker:
+                    price = float(ticker.get("price", 0)) if market_type == 'spot' else float(ticker.get("lastPrice", 0))
+                    price_change = float(ticker.get("priceChange", 0)) if market_type == 'spot' else float(ticker.get("priceChange", 0))
+                    price_change_percent = float(ticker.get("priceChangePercent", 0)) if market_type == 'spot' else float(ticker.get("priceChangePercent", 0))
+                    volume = float(ticker.get("quoteVolume", 0)) if market_type == 'spot' else float(ticker.get("quoteVolume", 0))
+
                     symbols.append({
                         "symbol": s["symbol"],
-                        "baseAsset": s["baseAsset"],
-                        "quoteAsset": s["quoteAsset"],
-                        "price": float(ticker.get("price", 0)),
-                        "priceChange": float(ticker.get("priceChange", 0)),
-                        "priceChangePercent": float(ticker.get("priceChangePercent", 0)),
-                        "volume": float(ticker.get("quoteVolume", 0)),
-                        "marketCap": float(ticker.get("quoteVolume", 0)) * float(ticker.get("price", 0)),
-                        "trend": "up" if float(ticker.get("priceChangePercent", 0)) > 0 else "down" if float(ticker.get("priceChangePercent", 0)) < 0 else "neutral"
+                        "baseAsset": base_asset_field,
+                        "quoteAsset": quote_asset_field,
+                        "price": price,
+                        "priceChange": price_change,
+                        "priceChangePercent": price_change_percent,
+                        "volume": volume,
+                        "marketCap": volume * price,
+                        "trend": "up" if price_change_percent > 0 else "down" if price_change_percent < 0 else "neutral",
+                        "marketType": market_type
                     })
-        
+
         return symbols[:limit]
 
     async def get_top_symbols_by_volume(self, limit: int = 50, quote_asset: str = "USDT") -> List[Dict[str, Any]]:

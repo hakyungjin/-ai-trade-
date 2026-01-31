@@ -21,10 +21,15 @@ batch_collector: BatchCandleCollector = None
 async def lifespan(app: FastAPI):
     """앱 시작/종료 시 DB 연결 및 스트림 관리"""
     global batch_collector
-    
-    await init_db()
-    
-    # 배치 캔들 수집기 초기화 및 시작
+
+    # DB 초기화 (실패해도 앱은 시작)
+    try:
+        await init_db()
+        logger.info("✅ Database initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ Database initialization failed (will retry): {e}")
+
+    # 배치 캔들 수집기 초기화 및 시작 (실패해도 앱은 시작)
     try:
         config = get_settings()
         binance = BinanceService(
@@ -33,21 +38,24 @@ async def lifespan(app: FastAPI):
             testnet=config.binance_testnet
         )
         batch_collector = BatchCandleCollector(binance)
-        
+
         # 백그라운드 작업으로 주기적 수집 시작 (1시간마다)
-        # 앱이 시작되면 첫 수집은 지연시키기 (5초 후)
-        asyncio.create_task(delayed_collection_start(batch_collector, delay=5))
+        # 앱이 시작되면 첫 수집은 지연시키기 (30초 후 - Cloud Run 타임아웃 방지)
+        asyncio.create_task(delayed_collection_start(batch_collector, delay=30))
         logger.info("✅ Batch candle collector initialized")
     except Exception as e:
-        logger.error(f"❌ Error initializing batch collector: {e}")
-    
+        logger.warning(f"⚠️ Batch collector initialization failed: {e}")
+
     yield
-    
+
     # 종료 시
-    if batch_collector:
-        batch_collector.stop_periodic_collection()
-    await binance_stream_manager.shutdown()
-    await close_db()
+    try:
+        if batch_collector:
+            batch_collector.stop_periodic_collection()
+        await binance_stream_manager.shutdown()
+        await close_db()
+    except Exception as e:
+        logger.error(f"❌ Error during shutdown: {e}")
 
 
 async def delayed_collection_start(collector: BatchCandleCollector, delay: int = 5):
@@ -107,10 +115,19 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    config = get_settings()
-    return {
-        "status": "healthy",
-        "testnet": config.binance_testnet,
-        "binance_configured": bool(config.binance_api_key),
-        "gemini_configured": bool(config.gemini_api_key)
-    }
+    """헬스체크 엔드포인트 - Cloud Run 시작 확인용"""
+    try:
+        config = get_settings()
+        return {
+            "status": "healthy",
+            "testnet": config.binance_testnet,
+            "binance_configured": bool(config.binance_api_key),
+            "gemini_configured": bool(config.gemini_api_key),
+            "database_configured": "localhost" not in config.database_url
+        }
+    except Exception as e:
+        logger.error(f"Health check error: {e}")
+        return {
+            "status": "degraded",
+            "error": str(e)
+        }

@@ -573,16 +573,23 @@ class ModelTrainingService:
         cls,
         symbol: str,
         timeframe: str = "1h",
-        days: int = 90
+        days: int = 90,
+        target_count: Optional[int] = None,
+        market_type: str = "spot"
     ) -> Dict[str, Any]:
         """비동기 데이터 수집 (코인 모니터링 워크플로우용)"""
-        logger.info(f"[데이터 수집] {symbol} {timeframe} {days}일 데이터 수집 시작")
+        logger.info(f"[데이터 수집] {symbol} {timeframe} {market_type} - days={days}, target_count={target_count}")
 
         try:
+            # target_count가 주어지면 우선 사용, 아니면 days 기반 계산
+            if target_count is None:
+                target_count = int(days * 24 * 60 / max(int(''.join(filter(str.isdigit, timeframe)) or '60'), 1))
+
             result = await cls.collect_data_for_training(
                 symbol=symbol,
                 timeframe=timeframe,
-                limit=int(days * 24 * 60 / max(int(''.join(filter(str.isdigit, timeframe)) or '60'), 1)),
+                limit=target_count,
+                market_type=market_type
             )
             logger.info(f"{symbol} {timeframe} 데이터 수집 완료")
             return result

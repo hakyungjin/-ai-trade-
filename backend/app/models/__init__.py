@@ -4,6 +4,7 @@ from app.models.vector_pattern import VectorPattern, VectorSimilarity
 from app.models.strategy_weights import StrategyWeights
 from app.models.coin import Coin, CoinStatistics, CoinAnalysisConfig, CoinPriceHistory
 from app.models.trained_model import TrainedModel
+from app.models.asset_mapping import AssetMapping
 
 __all__ = [
     'MarketCandle',
@@ -20,4 +21,5 @@ __all__ = [
     'CoinAnalysisConfig',
     'CoinPriceHistory',
     'TrainedModel',
+    'AssetMapping',
 ]

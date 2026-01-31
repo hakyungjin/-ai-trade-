@@ -19,6 +19,11 @@ class MarketCandle(Base):
     close_time = Column(DateTime)
     quote_volume = Column(Float)  # 거래대금
     trades_count = Column(Integer)  # 거래 횟수
+
+    # 통합 모델 지원 필드
+    market_type = Column(String(20), server_default='crypto', index=True)  # crypto, nasdaq, forex
+    is_market_open = Column(Integer, server_default='1')  # 시장 개장 여부 (1=open, 0=closed)
+
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (

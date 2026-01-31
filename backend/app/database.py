@@ -1,30 +1,56 @@
 import logging
+import os
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
-engine = create_async_engine(
-    settings.database_url,
-    echo=True,
-    pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=10
-)
+# Cloud Run에서는 echo=False로 설정하여 로그 과다 출력 방지
+is_cloud_run = os.getenv('K_SERVICE') is not None
 
-AsyncSessionLocal = async_sessionmaker(
-    engine,
-    class_=AsyncSession,
-    expire_on_commit=False
-)
+try:
+    settings = get_settings()
+    database_url = settings.database_url
+
+    # DATABASE_URL이 기본값이면 경고
+    if "localhost" in database_url and is_cloud_run:
+        logger.warning("⚠️ Using localhost DATABASE_URL in Cloud Run - this will not work!")
+        logger.warning("⚠️ Please set DATABASE_URL environment variable")
+
+    engine = create_async_engine(
+        database_url,
+        echo=not is_cloud_run,  # Cloud Run에서는 echo 비활성화
+        pool_pre_ping=True,
+        pool_size=5,
+        max_overflow=10,
+        connect_args={
+            "timeout": 10,  # 연결 타임아웃 10초
+        }
+    )
+    logger.info(f"✅ Database engine created (Cloud Run: {is_cloud_run})")
+except Exception as e:
+    logger.error(f"❌ Failed to create database engine: {e}")
+    # 기본 엔진 생성 (사용하지 않음)
+    engine = None
+
+if engine:
+    AsyncSessionLocal = async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False
+    )
+else:
+    AsyncSessionLocal = None
 
 Base = declarative_base()
 
 
 async def get_db():
     """의존성 주입용 DB 세션 생성기"""
+    if AsyncSessionLocal is None:
+        raise RuntimeError("Database not initialized")
+
     async with AsyncSessionLocal() as session:
         try:
             yield session
@@ -37,10 +63,22 @@ async def get_db():
 
 
 async def init_db():
-    """앱 시작 - 빠르게 실행 (마이그레이션은 수동으로)"""
-    logger.info("✅ Database connection pool initialized")
+    """앱 시작 - DB 연결 테스트"""
+    if engine is None:
+        logger.warning("⚠️ Database engine not initialized - skipping connection test")
+        return
+
+    try:
+        # 간단한 연결 테스트
+        async with engine.begin() as conn:
+            from sqlalchemy import text
+            await conn.execute(text("SELECT 1"))
+        logger.info("✅ Database connection verified")
+    except Exception as e:
+        logger.warning(f"⚠️ Database connection test failed: {e}")
 
 
 async def close_db():
     """데이터베이스 연결 종료"""
-    await engine.dispose()
+    if engine:
+        await engine.dispose()

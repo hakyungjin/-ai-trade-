@@ -25,8 +25,9 @@ ENV PYTHONUNBUFFERED=1
 EXPOSE 8080
 
 # 서버 실행 (Cloud Run의 PORT 환경 변수 사용)
-# Python으로 PORT 환경 변수 읽기
-CMD python -c "import os; import uvicorn; port = int(os.environ.get('PORT', 8080)); uvicorn.run('app.main:app', host='0.0.0.0', port=port)"
+# --timeout-keep-alive 추가로 연결 유지 시간 증가
+# --workers 1로 설정하여 메모리 사용 최소화
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8080} --timeout-keep-alive 65 --workers 1
 
 
 

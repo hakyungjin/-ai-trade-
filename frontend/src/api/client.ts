@@ -32,11 +32,11 @@ export const tradingApi = {
 // AI API
 export const aiApi = {
   // AI 예측 - 버튼 클릭 시에만 호출 (5m: 학습된 모델과 일치)
-  predict: (symbol: string, timeframe = '5m', market_type = 'spot') =>
-    apiClient.post('/ai/predict', { symbol, timeframe, market_type }),
+  predict: (symbol: string, timeframe = '5m', market_type = 'spot', use_unified_model = true) =>
+    apiClient.post('/ai/predict', { symbol, timeframe, market_type, use_unified_model }),
   // 가중치 기반 통합 분석 (AI + 기술적 지표) - 버튼 클릭 시에만 호출
-  combinedAnalysis: (symbol: string, timeframe = '5m', market_type = 'spot') =>
-    apiClient.post('/ai/combined-analysis', { symbol, timeframe, market_type }),
+  combinedAnalysis: (symbol: string, timeframe = '5m', market_type = 'spot', use_unified_model = true) =>
+    apiClient.post('/ai/combined-analysis', { symbol, timeframe, market_type, use_unified_model }),
   parsePrompt: (prompt: string) =>
     apiClient.post('/ai/parse-prompt', { prompt }),
   getMarketAnalysis: (symbol: string, timeframe = '1h') =>

@@ -10,8 +10,8 @@ from app.services.binance_service import BinanceService
 from app.services.weighted_strategy import WeightedStrategy
 from app.services.technical_indicators import TechnicalIndicators
 from app.services.vector_pattern_service import VectorPatternService
+from app.services.unified_model_service import get_unified_service
 from app.services.unified_data_service import UnifiedDataService
-from app.services.trained_model_service import get_trained_model_service, check_model_exists, get_available_models, get_ensemble_service
 from app.config import get_settings
 from app.database import get_db
 from app.models.vector_pattern import VectorPattern
@@ -35,9 +35,8 @@ ai_service = AIService(model_path=model_path)
 
 class PredictionRequest(BaseModel):
     symbol: str
-    timeframe: str = "5m"  # 1m, 5m, 15m, 1h, 4h, 1d (기본값: 5m - 학습된 모델과 일치)
-    cache_only: bool = False  # True면 DB 캐시만 사용 (API 호출 없음, 빠름!)
-    market_type: str = "spot"  # 'spot' 또는 'futures'
+    timeframe: str = "1h"  # 1m, 5m, 15m, 1h, 4h, 1d
+    use_unified_model: bool = True  # 통합 모델 사용 여부 (기본값: True)
 
 
 class PredictionResponse(BaseModel):
@@ -86,52 +85,12 @@ class TradingRule(BaseModel):
     description: str
 
 
-@router.get("/models")
-async def get_models_list():
-    """사용 가능한 AI 모델 목록 조회"""
-    models = get_available_models()
-    
-    # 모델 이름에서 심볼과 타임프레임 추출
-    model_info = []
-    for model in models:
-        # btcusdt_5m_v2 -> symbol: BTCUSDT, timeframe: 5m, version: v2
-        parts = model.split('_')
-        if len(parts) >= 2:
-            symbol = parts[0].upper()
-            timeframe = parts[1]
-            version = parts[2] if len(parts) > 2 else 'v1'
-            model_info.append({
-                "model_name": model,
-                "symbol": symbol,
-                "timeframe": timeframe,
-                "version": version
-            })
-    
-    return {
-        "count": len(models),
-        "models": model_info
-    }
-
-
-@router.get("/models/{symbol}")
-async def check_symbol_model(symbol: str, timeframe: str = "5m"):
-    """특정 심볼의 AI 모델 존재 여부 확인"""
-    exists = check_model_exists(symbol, timeframe)
-    
-    return {
-        "symbol": symbol.upper(),
-        "timeframe": timeframe,
-        "model_exists": exists,
-        "message": f"✅ {symbol.upper()} ({timeframe}) 모델 사용 가능" if exists else f"⚠️ {symbol.upper()} ({timeframe}) 모델 없음"
-    }
-
-
 @router.post("/predict", response_model=PredictionResponse)
 async def get_prediction(
     request: PredictionRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """AI 예측 신호 조회 (학습된 XGBoost 모델 전용)"""
+    """AI 예측 신호 조회 (DB 캐시 활용 + Gemini 우선, fallback으로 기존 모델)"""
     try:
         config = get_settings()
         binance = BinanceService(
@@ -145,51 +104,66 @@ async def get_prediction(
         current_price = price_data.get("price", 0)
 
         # 통합 데이터 서비스로 캐시 + 증분 수집 활용
-        # 기술적 지표 계산에 충분한 데이터 필요 (최소 200개 권장)
         unified_service = UnifiedDataService(db, binance)
         candles = await unified_service.get_klines_with_cache(
             symbol=request.symbol,
             timeframe=request.timeframe,
-            limit=300  # 지표 계산을 위해 충분한 데이터 필요
+            limit=100
         )
-        
-        logger.info(f"📊 Retrieved {len(candles)} candles for {request.symbol} {request.timeframe}")
-        
-        # 캔들 데이터가 부족하면 Binance에서 직접 조회
-        if len(candles) < 100:
-            logger.warning(f"⚠️ Insufficient candles from cache ({len(candles)}), fetching directly from Binance...")
-            candles = await binance.get_klines(
-                symbol=request.symbol,
-                interval=request.timeframe,
-                limit=300  # 지표 계산을 위해 충분한 데이터
-            )
-            logger.info(f"📊 Retrieved {len(candles)} candles from Binance API")
 
-        # 심볼별 학습된 XGBoost 모델 사용
-        if not check_model_exists(request.symbol, request.timeframe):
-            raise HTTPException(
-                status_code=503, 
-                detail=f"{request.symbol} AI 모델이 없습니다. ai-model/models/xgboost_{request.symbol.lower()}_{request.timeframe}_v2.joblib 파일이 필요합니다."
-            )
+        prediction = None
         
-        trained_service = get_trained_model_service(request.symbol, request.timeframe)
+        # Gemini API 키가 있으면 Gemini 사용
+        if config.gemini_api_key:
+            try:
+                prediction = await gemini_service.analyze_chart(
+                    symbol=request.symbol,
+                    candles=candles,
+                    current_price=current_price,
+                    timeframe=request.timeframe
+                )
+            except Exception as gemini_error:
+                # Gemini 에러 (할당량 초과 등) - 로깅만 하고 fallback
+                print(f"⚠️  Gemini API error (fallback to local model): {gemini_error}")
+                prediction = None
         
-        if not trained_service.is_loaded:
-            raise HTTPException(
-                status_code=503, 
-                detail=f"{request.symbol} AI 모델 로드에 실패했습니다."
-            )
-        
-        logger.info(f"🤖 Using trained XGBoost model for {request.symbol} ({request.timeframe})")
-        prediction = trained_service.predict(candles)
-        
-        if prediction.get('confidence', 0) == 0:
-            raise HTTPException(
-                status_code=500,
-                detail=f"예측 실패: {prediction.get('analysis', 'Unknown error')}"
-            )
-        
-        logger.info(f"✅ XGBoost prediction: {prediction.get('signal')} (conf: {prediction.get('confidence'):.2f})")
+        # Gemini 없거나 실패 시 로컬 모델 사용
+        if prediction is None:
+            # 통합 모델 우선 시도
+            if request.use_unified_model:
+                try:
+                    unified_service = get_unified_service()
+                    if unified_service:
+                        logger.info(f"🧠 Using Unified LSTM Model for {request.symbol}")
+                        prediction = await unified_service.predict(
+                            symbol=request.symbol,
+                            candles=candles,
+                            db=db
+                        )
+                    else:
+                        logger.warning("⚠️  Unified model not available, falling back to XGBoost")
+                        prediction = None
+                except Exception as unified_error:
+                    logger.error(f"⚠️  Unified model error: {unified_error}")
+                    prediction = None
+
+            # 통합 모델 실패 또는 미사용 시 기존 XGBoost 모델
+            if prediction is None:
+                try:
+                    prediction = await ai_service.predict_signal(
+                        symbol=request.symbol,
+                        candles=candles,
+                        current_price=current_price
+                    )
+                except Exception as local_error:
+                    logger.error(f"⚠️  Local AI model error: {local_error}")
+                    # Fallback: 중립 신호 반환
+                    prediction = {
+                        "signal": "HOLD",
+                        "confidence": 0.5,
+                        "direction": "NEUTRAL",
+                        "analysis": "Unable to analyze - using default neutral signal"
+                    }
 
         return PredictionResponse(
             symbol=request.symbol,
@@ -197,10 +171,10 @@ async def get_prediction(
             confidence=prediction["confidence"],
             predicted_direction=prediction["direction"],
             current_price=current_price,
-            analysis=prediction.get("analysis", "")
+            analysis=prediction["analysis"]
         )
     except Exception as e:
-        logger.error(f"❌ Prediction error: {e}")
+        print(f"❌ Prediction error: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -222,7 +196,7 @@ async def get_combined_analysis(
     request: PredictionRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    """🚀 AI 예측 + 가중치 기반 전략 통합 분석 (현물/선물 지원)"""
+    """🚀 AI 예측 + 가중치 기반 전략 통합 분석"""
     try:
         config = get_settings()
         binance = BinanceService(
@@ -230,55 +204,34 @@ async def get_combined_analysis(
             secret_key=config.binance_secret_key,
             testnet=config.binance_testnet
         )
-        
-        # market_type 정규화
-        market_type = request.market_type.lower() if request.market_type else 'spot'
-        logger.info(f"🔍 Combined analysis request: {request.symbol} {request.timeframe} market_type={market_type}")
 
-        # 현재가 조회 (마켓 타입에 따라 API 분기)
-        price_data = await binance.get_current_price(request.symbol, market_type=market_type)
+        # 현재가 조회
+        price_data = await binance.get_current_price(request.symbol)
         current_price = price_data.get("price", 0)
 
-        # 데이터 수집 (cache_only 옵션에 따라 분기)
+        # 데이터 수집 (Binance에서 직접)
         try:
-            unified_service = UnifiedDataService(db, binance)
-            
-            if request.cache_only:
-                # 🚀 빠른 모드: DB 캐시만 사용 (API 호출 없음)
-                logger.info(f"⚡ [Cache Only] Fetching candles for {request.symbol} {request.timeframe}")
-                candles = await unified_service.get_klines_db_only(
-                    symbol=request.symbol,
-                    timeframe=request.timeframe,
-                    limit=300
-                )
-                
-                if len(candles) < 50:
-                    logger.warning(f"⚠️ Insufficient cached candles ({len(candles)}). Use cache_only=false for full fetch.")
-                    # 캐시 모드에서는 부족해도 Binance 호출 안함
-                else:
-                    logger.info(f"⚡ [Cache Only] Got {len(candles)} candles from DB")
-            else:
-                # 항상 Binance에서 최신 데이터 조회 (실시간 분석을 위해)
-                logger.info(f"🔄 Fetching fresh candles for {request.symbol} {request.timeframe} from Binance...")
-                candles = await binance.get_klines(
-                    symbol=request.symbol,
-                    interval=request.timeframe,
-                    limit=300,  # 지표 계산을 위해 충분한 데이터
-                    market_type=market_type
-                )
-                logger.info(f"📊 Retrieved {len(candles)} fresh candles from Binance API ({market_type})")
+            print(f"🔄 Fetching candles for {request.symbol} {request.timeframe}...")
+            candles = await binance.get_klines(
+                symbol=request.symbol,
+                interval=request.timeframe,
+                limit=100
+            )
+            print(f"✅ Fetched {len(candles)} candles from Binance")
         except Exception as e:
             print(f"❌ Error fetching klines: {e}")
             import traceback
             traceback.print_exc()
-            return CombinedAnalysisResponse(
+            return CombinedPredictionResponse(
                 symbol=request.symbol,
                 current_price=0,
                 timeframe=request.timeframe,
-                ai_prediction=AISignalResponse(
+                ai_prediction=PredictionResponse(
+                    symbol=request.symbol,
                     signal="HOLD",
                     confidence=0.0,
-                    direction="NEUTRAL",
+                    predicted_direction="NEUTRAL",
+                    current_price=0,
                     analysis="Failed to fetch candles"
                 ),
                 weighted_signal=WeightedSignalResponse(
@@ -292,35 +245,42 @@ async def get_combined_analysis(
                 final_confidence=0.0
             )
 
-        # ===== AI 예측 (XGBoost + LSTM 앙상블) =====
+        # ===== AI 예측 =====
         ai_prediction = None
-        
-        try:
-            # 앙상블 서비스 사용 (XGBoost + LSTM)
-            ensemble_service = get_ensemble_service(request.symbol, request.timeframe)
-            
-            if ensemble_service.is_loaded:
-                logger.info(f"🎯 Using Ensemble model (XGBoost + LSTM) for {request.symbol} ({request.timeframe})")
-                ai_prediction = ensemble_service.predict(candles)
-                logger.info(f"✅ Ensemble prediction: {ai_prediction.get('signal')} (conf: {ai_prediction.get('confidence'):.2f}) - {ai_prediction.get('model_used', 'Unknown')}")
-            else:
-                logger.info(f"📝 No AI models for {request.symbol} ({request.timeframe})")
-        except Exception as e:
-            logger.warning(f"⚠️ Ensemble model error for {request.symbol}: {e}")
-            ai_prediction = None
+        if config.gemini_api_key:
+            try:
+                ai_prediction = await gemini_service.analyze_chart(
+                    symbol=request.symbol,
+                    candles=candles,
+                    current_price=current_price,
+                    timeframe=request.timeframe
+                )
+            except Exception as e:
+                print(f"⚠️ Gemini API error: {e}")
+                ai_prediction = None
         
         if ai_prediction is None:
-            ai_prediction = {
-                "signal": "HOLD",
-                "confidence": 0.0,
-                "direction": "NEUTRAL",
-                "analysis": f"{request.symbol} AI 모델이 없습니다. 기술적 지표만 참고하세요."
-            }
+            try:
+                ai_prediction = await ai_service.predict_signal(
+                    symbol=request.symbol,
+                    candles=candles,
+                    current_price=current_price
+                )
+            except Exception as e:
+                print(f"⚠️ Local AI model error: {e}")
+                ai_prediction = {
+                    "signal": "HOLD",
+                    "confidence": 0.5,
+                    "direction": "NEUTRAL",
+                    "analysis": "Unable to analyze - using default neutral signal"
+                }
 
         # ===== 가중치 기반 전략 =====
         try:
             import pandas as pd
+            import logging
             
+            logger = logging.getLogger(__name__)
             logger.info(f"📊 Starting weighted analysis for {request.symbol}")
             
             # 캔들 데이터를 DataFrame으로 변환
@@ -363,26 +323,18 @@ async def get_combined_analysis(
             logger.info(f"Analysis result keys: {analysis_result.keys()}")
             
             # 응답 객체 생성
-            recommendation_obj = analysis_result.get('recommendation', {})
-            if isinstance(recommendation_obj, dict):
-                action = recommendation_obj.get('action', 'neutral')
-                confidence_level = recommendation_obj.get('confidence_level', 'low')
-                recommendation_text = f"{action.upper()} ({confidence_level} 신뢰도)"
-            else:
-                recommendation_text = str(recommendation_obj) if recommendation_obj else '기술적 분석 중립'
-            
-            # indicator_scores 로깅
-            indicator_scores = analysis_result.get('indicator_scores', {})
-            logger.info(f"📊 Indicator scores: {indicator_scores}")
+            recommendation_text = '기술적 분석 중립'
+            if isinstance(analysis_result.get('recommendation'), dict):
+                recommendation_text = analysis_result['recommendation'].get('description', '기술적 분석 중립')
             
             weighted_signal = WeightedSignalResponse(
                 signal=analysis_result.get('signal', 'neutral'),
                 score=float(analysis_result.get('combined_score', 0)),
                 confidence=float(analysis_result.get('confidence', 0)),
-                indicators=indicator_scores,
+                indicators=analysis_result.get('indicator_scores', {}),
                 recommendation=recommendation_text
             )
-            logger.info(f"📈 Weighted signal: {weighted_signal.signal}, score: {weighted_signal.score}, indicators: {len(indicator_scores)}")
+            logger.info(f"📈 Weighted signal response created: {weighted_signal.signal}")
             
         except Exception as e:
             import traceback

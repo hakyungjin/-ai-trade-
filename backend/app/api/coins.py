@@ -317,21 +317,22 @@ async def search_spot_coins(query: str, limit: int = 20):
     try:
         from app.config import get_settings
         from app.services.binance_service import BinanceService
-        
+
         settings = get_settings()
         binance = BinanceService(
             api_key=settings.binance_api_key,
             secret_key=settings.binance_secret_key,
             testnet=settings.binance_testnet
         )
-        
-        # 현물 코인 검색
+
+        # 현물 코인 검색 (market_type='spot' 명시)
         results = await binance.search_symbols_advanced(
             query=query,
             quote_asset="USDT",
-            limit=limit
+            limit=limit,
+            market_type="spot"
         )
-        
+
         logger.info(f"✅ Spot 코인 검색: {query} → {len(results)}개 결과")
         return {
             "success": True,
@@ -348,21 +349,22 @@ async def search_futures_coins(query: str, limit: int = 20):
     try:
         from app.config import get_settings
         from app.services.binance_service import BinanceService
-        
+
         settings = get_settings()
         binance = BinanceService(
             api_key=settings.binance_api_key,
             secret_key=settings.binance_secret_key,
             testnet=settings.binance_testnet
         )
-        
-        # 선물 코인 검색 (현물과 동일 - 바이낸스는 대부분의 통화쌍을 지원)
+
+        # 선물 코인 검색 (market_type='futures' 사용)
         results = await binance.search_symbols_advanced(
             query=query,
             quote_asset="USDT",
-            limit=limit
+            limit=limit,
+            market_type="futures"
         )
-        
+
         logger.info(f"✅ Futures 코인 검색: {query} → {len(results)}개 결과")
         return {
             "success": True,

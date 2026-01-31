@@ -26,117 +26,6 @@ class UnifiedDataService:
         self.binance = binance_service
         self.collector = IncrementalDataCollector(db, binance_service)
 
-    async def get_klines_db_only(
-        self,
-        symbol: str,
-        timeframe: str = "1h",
-        limit: int = 100
-    ) -> List[Dict[str, Any]]:
-        """
-        🚀 DB에서만 캔들 조회 (API 호출 없음 - 빠름!)
-        
-        스마트 스케줄러가 미리 수집한 데이터만 사용.
-        분석 시 빠른 응답을 위해 사용.
-        
-        Args:
-            symbol: 거래쌍
-            timeframe: 시간프레임
-            limit: 필요한 캔들 개수
-        
-        Returns:
-            캔들 데이터 리스트 (시간순)
-        """
-        try:
-            cached_candles = await self._get_candles_from_db(
-                symbol=symbol,
-                timeframe=timeframe,
-                limit=limit
-            )
-            
-            logger.info(f"⚡ [DB Only] Retrieved {len(cached_candles)} candles for {symbol} {timeframe}")
-            return cached_candles
-            
-        except Exception as e:
-            logger.error(f"Error in get_klines_db_only: {e}")
-            return []
-    
-    async def get_data_freshness(
-        self,
-        symbol: str,
-        timeframe: str
-    ) -> Dict[str, Any]:
-        """
-        DB 데이터의 신선도 확인
-        
-        Returns:
-            {
-                "symbol": str,
-                "timeframe": str,
-                "total_candles": int,
-                "latest_candle_time": datetime,
-                "age_minutes": int,  # 최신 캔들 이후 경과 시간
-                "is_fresh": bool  # 타임프레임 기준 최신인지
-            }
-        """
-        try:
-            # 마지막 캔들 시간 조회
-            last_time = await self.collector.get_last_saved_time(symbol, timeframe)
-            
-            if last_time is None:
-                return {
-                    "symbol": symbol,
-                    "timeframe": timeframe,
-                    "total_candles": 0,
-                    "latest_candle_time": None,
-                    "age_minutes": -1,
-                    "is_fresh": False
-                }
-            
-            # 캔들 개수 조회
-            from sqlalchemy import func
-            result = await self.db.execute(
-                select(func.count(MarketCandle.id)).where(
-                    MarketCandle.symbol == symbol,
-                    MarketCandle.timeframe == timeframe
-                )
-            )
-            count = result.scalar() or 0
-            
-            # 경과 시간 계산
-            now = datetime.utcnow()
-            age_minutes = int((now - last_time).total_seconds() / 60)
-            
-            # 타임프레임별 신선도 기준 (분)
-            freshness_threshold = {
-                "1m": 2,
-                "5m": 6,
-                "15m": 20,
-                "30m": 35,
-                "1h": 65,
-                "4h": 250,
-                "1d": 1500
-            }
-            
-            threshold = freshness_threshold.get(timeframe, 65)
-            is_fresh = age_minutes <= threshold
-            
-            return {
-                "symbol": symbol,
-                "timeframe": timeframe,
-                "total_candles": count,
-                "latest_candle_time": last_time.isoformat(),
-                "age_minutes": age_minutes,
-                "is_fresh": is_fresh
-            }
-            
-        except Exception as e:
-            logger.error(f"Error checking data freshness: {e}")
-            return {
-                "symbol": symbol,
-                "timeframe": timeframe,
-                "error": str(e)
-            }
-
     async def get_klines_with_cache(
         self,
         symbol: str,
@@ -283,21 +172,8 @@ class UnifiedDataService:
             for kline in klines:
                 try:
                     # timestamp를 datetime으로 변환
-                    # timestamp가 문자열인 경우 처리
-                    ts = kline["timestamp"]
-                    if isinstance(ts, str):
-                        # ISO format string인 경우
-                        open_time = datetime.fromisoformat(ts.replace('Z', '+00:00'))
-                    else:
-                        # milliseconds int인 경우
-                        open_time = datetime.utcfromtimestamp(ts / 1000)
-                    
-                    # close_time 처리 (ISO string 또는 milliseconds)
-                    close_time_val = kline.get("close_time", ts)
-                    if isinstance(close_time_val, str):
-                        close_time = datetime.fromisoformat(close_time_val.replace('Z', '+00:00'))
-                    else:
-                        close_time = datetime.utcfromtimestamp(close_time_val / 1000)
+                    open_time = datetime.utcfromtimestamp(kline["timestamp"] / 1000)
+                    close_time = datetime.utcfromtimestamp(kline.get("close_time", kline["timestamp"]) / 1000)
 
                     # 이미 존재하는지 확인
                     existing = await self.db.execute(
