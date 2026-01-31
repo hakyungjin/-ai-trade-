@@ -18,15 +18,20 @@ try:
         logger.warning("⚠️ Using localhost DATABASE_URL in Cloud Run - this will not work!")
         logger.warning("⚠️ Please set DATABASE_URL environment variable")
 
+    # PostgreSQL과 MySQL에 따라 다른 connect_args 사용
+    connect_args = {}
+    if "mysql" in database_url or "aiomysql" in database_url:
+        connect_args = {"timeout": 10}  # MySQL/aiomysql 전용
+    elif "postgresql" in database_url or "asyncpg" in database_url:
+        connect_args = {"timeout": 10.0, "command_timeout": 10.0}  # PostgreSQL/asyncpg 전용
+
     engine = create_async_engine(
         database_url,
         echo=not is_cloud_run,  # Cloud Run에서는 echo 비활성화
         pool_pre_ping=True,
         pool_size=5,
         max_overflow=10,
-        connect_args={
-            "timeout": 10,  # 연결 타임아웃 10초
-        }
+        connect_args=connect_args
     )
     logger.info(f"✅ Database engine created (Cloud Run: {is_cloud_run})")
 except Exception as e:
