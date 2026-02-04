@@ -55,7 +55,7 @@ if (Test-Path $envProdPath) {
 
 # Supabase connection string (override if provided via parameter)
 if ($SupabasePassword) {
-    $supabaseUrl = "postgresql+asyncpg://postgres:$SupabasePassword@db.vmiinfjxpnoevsehhzey.supabase.co:5432/postgres"
+    $supabaseUrl = "postgresql+asyncpg://postgres:$SupabasePassword@db.vmiinfjxpnoevsehhzey.supabase.co:6543/postgres"
     $env:DATABASE_URL = $supabaseUrl
 }
 
@@ -133,7 +133,7 @@ $envVars = @()
 
 # DATABASE_URL 설정 (우선순위: 파라미터 > 환경변수 > .env.production)
 if ($SupabasePassword) {
-    $supabaseUrl = "postgresql+asyncpg://postgres:$SupabasePassword@db.vmiinfjxpnoevsehhzey.supabase.co:5432/postgres"
+    $supabaseUrl = "postgresql+asyncpg://postgres:$SupabasePassword@db.vmiinfjxpnoevsehhzey.supabase.co:6543/postgres"
     $env:DATABASE_URL = $supabaseUrl
 }
 
@@ -153,6 +153,12 @@ if ($env:BINANCE_SECRET_KEY) {
 }
 if ($env:BINANCE_TESTNET) {
     $envVars += "BINANCE_TESTNET=$($env:BINANCE_TESTNET)"
+}
+if ($env:GEMINI_API_KEY) {
+    $envVars += "GEMINI_API_KEY=$($env:GEMINI_API_KEY)"
+}
+if ($env:ALPHA_VANTAGE_API_KEY) {
+    $envVars += "ALPHA_VANTAGE_API_KEY=$($env:ALPHA_VANTAGE_API_KEY)"
 }
 
 $envVarsString = $envVars -join ","

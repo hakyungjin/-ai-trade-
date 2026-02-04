@@ -175,6 +175,21 @@ export const collectionApi = {
     }),
 };
 
+// Stock API - 미국 주식 데이터 (Alpha Vantage)
+export const stockApi = {
+  // 주식 티커 (현재가)
+  getTicker: (symbol: string) =>
+    apiClient.get(`/v1/stocks/ticker/${symbol}`),
+
+  // 주식 캔들 데이터
+  getKlines: (symbol: string, interval = '1h', limit = 100) =>
+    apiClient.get(`/v1/stocks/klines/${symbol}`, { params: { interval, limit } }),
+
+  // 주식 종합 분석 (기술적 지표 + AI)
+  getAnalysis: (symbol: string, timeframe = '1h') =>
+    apiClient.post(`/v1/stocks/analysis/${symbol}`, null, { params: { timeframe } }),
+};
+
 // WebSocket URL 헬퍼
 export const getWebSocketUrl = () => {
   const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:8000';

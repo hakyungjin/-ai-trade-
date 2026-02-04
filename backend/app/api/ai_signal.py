@@ -48,12 +48,28 @@ class PredictionResponse(BaseModel):
     analysis: str
 
 
+class VolumeStats(BaseModel):
+    """거래량 종합 통계"""
+    current_volume: float = 0
+    ma_20_ratio: float = 0      # 20기간 MA 대비 배수
+    ma_50_ratio: float = 0      # 50기간 MA 대비 배수
+    percentile: float = 0       # 전체 대비 백분위 (0~100)
+    prev_5_ratio: float = 0     # 직전 5캔들 평균 대비 배수
+    is_spike: bool = False      # 급등 여부 (2σ 초과)
+    avg: float = 0              # 전체 평균
+    max: float = 0              # 전체 최대
+    min: float = 0              # 전체 최소
+    std: float = 0              # 표준편차
+    z_score: float = 0          # Z-score
+
+
 class WeightedSignalResponse(BaseModel):
     signal: str  # "STRONG_BUY", "BUY", "NEUTRAL", "SELL", "STRONG_SELL"
     score: float  # -1 ~ 1
     confidence: float  # 0.0 ~ 1.0
     indicators: Dict[str, Any]  # 각 지표별 점수
     recommendation: str
+    volume_stats: Optional[VolumeStats] = None  # 거래량 종합 통계
 
 
 class CombinedPredictionResponse(BaseModel):
@@ -327,12 +343,17 @@ async def get_combined_analysis(
             if isinstance(analysis_result.get('recommendation'), dict):
                 recommendation_text = analysis_result['recommendation'].get('description', '기술적 분석 중립')
             
+            # 거래량 통계 변환
+            raw_volume_stats = analysis_result.get('volume_stats', {})
+            volume_stats_obj = VolumeStats(**raw_volume_stats) if raw_volume_stats else None
+
             weighted_signal = WeightedSignalResponse(
                 signal=analysis_result.get('signal', 'neutral'),
                 score=float(analysis_result.get('combined_score', 0)),
                 confidence=float(analysis_result.get('confidence', 0)),
                 indicators=analysis_result.get('indicator_scores', {}),
-                recommendation=recommendation_text
+                recommendation=recommendation_text,
+                volume_stats=volume_stats_obj
             )
             logger.info(f"📈 Weighted signal response created: {weighted_signal.signal}")
             

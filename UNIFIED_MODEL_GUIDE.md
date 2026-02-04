@@ -53,14 +53,7 @@ python scripts/collect_large_dataset.py --symbol ETHUSDT --timeframe 1h --limit 
 
 ### Step 2: 통합 데이터셋 생성
 ```bash
-python scripts/prepare_unified_dataset.py \
-  --symbols BTCUSDT ETHUSDT BNBUSDT XRPUSDT ADAUSDT \
-  --timeframe 1h \
-  --limit 10000 \
-  --threshold 0.02 \
-  --lookahead 5 \
-  --classes 3 \
-  --output data/unified_1h.csv
+python scripts/prepare_unified_dataset.py --symbols BTCUSDT ETHUSDT BNBUSDT XRPUSDT ADAUSDT --timeframe 1h --limit 10000 --threshold 0.02 --lookahead 5 --classes 3 --output data/unified_1h.csv
 ```
 
 **파라미터 설명:**

@@ -23,7 +23,7 @@ import { Progress } from '@/components/ui/progress';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
-import { marketApi, aiApi, apiClient, feedbackApi, modelApi } from '@/api/client';
+import { stockApi, apiClient, feedbackApi, modelApi, aiApi } from '@/api/client';
 import { PriceChart } from './market';
 
 interface MonitoredStock {
@@ -213,8 +213,8 @@ export function StockAnalysis() {
     
     try {
       const [tickerRes, analysisRes] = await Promise.all([
-        marketApi.getTicker(symbol, 'spot').catch(() => null),
-        aiApi.combinedAnalysis(symbol, '1h', 'spot').catch(() => null),
+        stockApi.getTicker(symbol).catch(() => null),
+        stockApi.getAnalysis(symbol, '1h').catch(() => null),
       ]);
 
       if (currentRequestId !== requestIdRef.current) return;
@@ -223,7 +223,7 @@ export function StockAnalysis() {
         const tickerData = tickerRes.data.data || tickerRes.data;
         if (tickerData?.price !== undefined) {
           setCurrentPrice(tickerData.price);
-          setPriceChange(tickerData.priceChangePercent || 0);
+          setPriceChange(tickerData.change_percent || tickerData.priceChangePercent || 0);
         }
       }
 
@@ -247,7 +247,8 @@ export function StockAnalysis() {
     setWeightedAnalysis(null);
     fetchData(selectedSymbol);
     
-    const interval = setInterval(() => fetchData(selectedSymbol), 15000);
+    // Alpha Vantage 무료 티어 rate limit 고려하여 60초 간격
+    const interval = setInterval(() => fetchData(selectedSymbol), 60000);
     return () => clearInterval(interval);
   }, [selectedSymbol]);
 
@@ -466,7 +467,7 @@ export function StockAnalysis() {
               </Card>
 
               {/* 차트 */}
-              <PriceChart symbol={selectedSymbol} />
+              <PriceChart symbol={selectedSymbol} isStock />
             </div>
 
             {/* 분석 패널 */}

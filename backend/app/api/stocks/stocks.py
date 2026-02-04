@@ -2,19 +2,89 @@
 Stock monitoring and analysis API endpoints
 """
 
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
+from datetime import datetime
 import asyncio
+import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 from app.database import get_db
 from app.models.stocks.stock import Stock, StockStatistics, StockAnalysisConfig
+from app.services.stocks.stock_service import StockDataService, AlphaVantageService
+from app.services.technical_indicators import TechnicalIndicators
+from app.services.weighted_strategy import WeightedStrategy
+from app.config import get_settings
 import logging
 
 logger = logging.getLogger(__name__)
 
+# 주식 데이터 서비스 초기화
+_stock_data_service = None
+
+def get_stock_data_service() -> StockDataService:
+    global _stock_data_service
+    if _stock_data_service is None:
+        _stock_data_service = StockDataService()
+    return _stock_data_service
+
 router = APIRouter(prefix="/api/v1/stocks", tags=["stocks"])
+
+
+# Popular US stocks list (S&P 500 top stocks)
+_POPULAR_STOCKS = [
+    {"symbol": "AAPL", "name": "Apple Inc.", "sector": "Technology"},
+    {"symbol": "MSFT", "name": "Microsoft Corporation", "sector": "Technology"},
+    {"symbol": "GOOGL", "name": "Alphabet Inc. Class A", "sector": "Technology"},
+    {"symbol": "GOOG", "name": "Alphabet Inc. Class C", "sector": "Technology"},
+    {"symbol": "AMZN", "name": "Amazon.com Inc.", "sector": "Consumer Cyclical"},
+    {"symbol": "NVDA", "name": "NVIDIA Corporation", "sector": "Technology"},
+    {"symbol": "META", "name": "Meta Platforms Inc.", "sector": "Technology"},
+    {"symbol": "TSLA", "name": "Tesla Inc.", "sector": "Consumer Cyclical"},
+    {"symbol": "BRK.B", "name": "Berkshire Hathaway Inc. Class B", "sector": "Financial Services"},
+    {"symbol": "LLY", "name": "Eli Lilly and Company", "sector": "Healthcare"},
+    {"symbol": "V", "name": "Visa Inc.", "sector": "Financial Services"},
+    {"symbol": "UNH", "name": "UnitedHealth Group Incorporated", "sector": "Healthcare"},
+    {"symbol": "XOM", "name": "Exxon Mobil Corporation", "sector": "Energy"},
+    {"symbol": "JPM", "name": "JPMorgan Chase & Co.", "sector": "Financial Services"},
+    {"symbol": "JNJ", "name": "Johnson & Johnson", "sector": "Healthcare"},
+    {"symbol": "MA", "name": "Mastercard Incorporated", "sector": "Financial Services"},
+    {"symbol": "PG", "name": "The Procter & Gamble Company", "sector": "Consumer Defensive"},
+    {"symbol": "AVGO", "name": "Broadcom Inc.", "sector": "Technology"},
+    {"symbol": "HD", "name": "The Home Depot Inc.", "sector": "Consumer Cyclical"},
+    {"symbol": "CVX", "name": "Chevron Corporation", "sector": "Energy"},
+    {"symbol": "ABBV", "name": "AbbVie Inc.", "sector": "Healthcare"},
+    {"symbol": "MRK", "name": "Merck & Co. Inc.", "sector": "Healthcare"},
+    {"symbol": "COST", "name": "Costco Wholesale Corporation", "sector": "Consumer Defensive"},
+    {"symbol": "KO", "name": "The Coca-Cola Company", "sector": "Consumer Defensive"},
+    {"symbol": "PEP", "name": "PepsiCo Inc.", "sector": "Consumer Defensive"},
+    {"symbol": "ADBE", "name": "Adobe Inc.", "sector": "Technology"},
+    {"symbol": "TMO", "name": "Thermo Fisher Scientific Inc.", "sector": "Healthcare"},
+    {"symbol": "NFLX", "name": "Netflix Inc.", "sector": "Communication Services"},
+    {"symbol": "WMT", "name": "Walmart Inc.", "sector": "Consumer Defensive"},
+    {"symbol": "CRM", "name": "Salesforce Inc.", "sector": "Technology"},
+    {"symbol": "BAC", "name": "Bank of America Corporation", "sector": "Financial Services"},
+    {"symbol": "ORCL", "name": "Oracle Corporation", "sector": "Technology"},
+    {"symbol": "AMD", "name": "Advanced Micro Devices Inc.", "sector": "Technology"},
+    {"symbol": "CSCO", "name": "Cisco Systems Inc.", "sector": "Technology"},
+    {"symbol": "ACN", "name": "Accenture plc", "sector": "Technology"},
+    {"symbol": "NKE", "name": "NIKE Inc.", "sector": "Consumer Cyclical"},
+    {"symbol": "TXN", "name": "Texas Instruments Incorporated", "sector": "Technology"},
+    {"symbol": "LIN", "name": "Linde plc", "sector": "Basic Materials"},
+    {"symbol": "QCOM", "name": "QUALCOMM Incorporated", "sector": "Technology"},
+    {"symbol": "ABT", "name": "Abbott Laboratories", "sector": "Healthcare"},
+    {"symbol": "INTC", "name": "Intel Corporation", "sector": "Technology"},
+    {"symbol": "CMCSA", "name": "Comcast Corporation", "sector": "Communication Services"},
+    {"symbol": "DHR", "name": "Danaher Corporation", "sector": "Healthcare"},
+    {"symbol": "PM", "name": "Philip Morris International Inc.", "sector": "Consumer Defensive"},
+    {"symbol": "VZ", "name": "Verizon Communications Inc.", "sector": "Communication Services"},
+    {"symbol": "WFC", "name": "Wells Fargo & Company", "sector": "Financial Services"},
+    {"symbol": "DIS", "name": "The Walt Disney Company", "sector": "Communication Services"},
+    {"symbol": "INTU", "name": "Intuit Inc.", "sector": "Technology"},
+    {"symbol": "CAT", "name": "Caterpillar Inc.", "sector": "Industrials"},
+    {"symbol": "IBM", "name": "International Business Machines Corporation", "sector": "Technology"},
+]
 
 
 # ===== Pydantic Models =====
@@ -215,6 +285,50 @@ async def get_all_stocks(db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/search")
+async def search_stocks(query: str = "", limit: int = 20):
+    """Search stocks by symbol or name"""
+    try:
+        query_upper = query.upper().strip()
+
+        if not query_upper:
+            return {
+                "success": True,
+                "symbols": _POPULAR_STOCKS[:limit]
+            }
+
+        results = []
+        for stock in _POPULAR_STOCKS:
+            if (query_upper in stock["symbol"].upper() or
+                query_upper in stock["name"].upper()):
+                results.append({
+                    "symbol": stock["symbol"],
+                    "baseAsset": stock["symbol"],
+                    "quoteAsset": "USD",
+                    "name": stock["name"],
+                    "sector": stock["sector"],
+                    "price": 0,
+                    "priceChange": 0,
+                    "priceChangePercent": 0,
+                    "volume": 0,
+                    "marketCap": 0,
+                    "trend": "neutral"
+                })
+
+        return {
+            "success": True,
+            "symbols": results[:limit]
+        }
+
+    except Exception as e:
+        logger.error(f"Stock search failed: {str(e)}")
+        return {
+            "success": False,
+            "symbols": [],
+            "error": str(e)
+        }
+
+
 @router.get("/{symbol}", response_model=StockResponse)
 async def get_stock(
     symbol: str,
@@ -226,10 +340,10 @@ async def get_stock(
             select(Stock).where(Stock.symbol == symbol)
         )
         stock = result.scalar_one_or_none()
-        
+
         if not stock:
             raise HTTPException(status_code=404, detail=f"Stock {symbol} not found")
-        
+
         return stock
     except Exception as e:
         logger.error(f"Error getting stock {symbol}: {str(e)}")
@@ -393,153 +507,282 @@ async def remove_stock_monitoring(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# ===== 주식 전용 데이터 API =====
+
+@router.get("/ticker/{symbol}")
+async def get_stock_ticker(symbol: str):
+    """주식 현재가 조회 (Alpha Vantage)"""
+    try:
+        service = get_stock_data_service()
+        quote = await service.alpha_vantage.get_quote(symbol)
+
+        if not quote:
+            return {
+                "data": {
+                    "symbol": symbol,
+                    "price": 0,
+                    "priceChangePercent": 0,
+                    "volume": 0,
+                },
+                "source": "alpha_vantage",
+                "error": "Quote data unavailable"
+            }
+
+        price = float(quote.get("05. price", 0))
+        change_pct = float(quote.get("10. change percent", "0").replace("%", ""))
+        volume = int(quote.get("06. volume", 0))
+        prev_close = float(quote.get("08. previous close", 0))
+
+        return {
+            "data": {
+                "symbol": symbol,
+                "price": price,
+                "priceChangePercent": change_pct,
+                "volume": volume,
+                "previousClose": prev_close,
+                "open": float(quote.get("02. open", 0)),
+                "high": float(quote.get("03. high", 0)),
+                "low": float(quote.get("04. low", 0)),
+            },
+            "source": "alpha_vantage"
+        }
+    except Exception as e:
+        logger.error(f"Error fetching stock ticker {symbol}: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/klines/{symbol}")
+async def get_stock_klines(
+    symbol: str,
+    interval: str = "60min",
+    limit: int = 100
+):
+    """주식 캔들(OHLCV) 데이터 조회 (Alpha Vantage)"""
+    try:
+        service = get_stock_data_service()
+
+        # interval 매핑: 프론트엔드 형식 → Alpha Vantage 형식
+        interval_map = {
+            "1m": "1min", "5m": "5min", "15m": "15min",
+            "30m": "30min", "1h": "60min", "60min": "60min",
+            "1d": "1d", "1D": "1d",
+        }
+        av_interval = interval_map.get(interval, interval)
+
+        candles = await service.collect_historical_data(
+            symbol=symbol,
+            interval=av_interval,
+            days=90
+        )
+
+        if not candles:
+            return {"success": True, "data": [], "symbol": symbol, "interval": interval}
+
+        # timestamp를 밀리초 숫자로 변환 (프론트엔드 호환)
+        for candle in candles:
+            ts = candle["timestamp"]
+            if isinstance(ts, str):
+                try:
+                    dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    dt = datetime.strptime(ts, "%Y-%m-%d")
+                candle["timestamp"] = int(dt.timestamp() * 1000)
+
+        # 시간순 정렬 (오래된 것부터) + limit 적용
+        candles.sort(key=lambda x: x["timestamp"])
+        candles = candles[-limit:]
+
+        return {
+            "success": True,
+            "data": candles,
+            "symbol": symbol,
+            "interval": interval,
+            "total": len(candles)
+        }
+    except Exception as e:
+        logger.error(f"Error fetching stock klines {symbol}: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/analysis/{symbol}")
+async def get_stock_analysis(
+    symbol: str,
+    timeframe: str = "60min",
+    limit: int = 100
+):
+    """주식 기술적 지표 + AI 분석 (Alpha Vantage 데이터 기반)"""
+    try:
+        service = get_stock_data_service()
+        settings = get_settings()
+
+        # 1) 현재가 조회
+        current_price = await service.get_current_price(symbol) or 0
+
+        # 2) 캔들 데이터 수집
+        interval_map = {
+            "1m": "1min", "5m": "5min", "15m": "15min",
+            "30m": "30min", "1h": "60min", "60min": "60min",
+            "1d": "1d",
+        }
+        av_interval = interval_map.get(timeframe, timeframe)
+
+        candles = await service.collect_historical_data(
+            symbol=symbol,
+            interval=av_interval,
+            days=90
+        )
+
+        if not candles or len(candles) < 10:
+            return {
+                "symbol": symbol,
+                "current_price": current_price,
+                "timeframe": timeframe,
+                "ai_prediction": {
+                    "signal": "HOLD",
+                    "confidence": 0,
+                    "predicted_direction": "NEUTRAL",
+                    "current_price": current_price,
+                    "analysis": "캔들 데이터 부족"
+                },
+                "weighted_signal": {
+                    "signal": "neutral",
+                    "score": 0,
+                    "confidence": 0,
+                    "indicators": {},
+                    "recommendation": "데이터 부족으로 분석 불가",
+                    "volume_stats": None
+                },
+                "final_signal": "HOLD",
+                "final_confidence": 0.0
+            }
+
+        # 시간순 정렬 + limit
+        candles.sort(key=lambda x: x["timestamp"])
+        candles = candles[-limit:]
+
+        # 3) DataFrame 변환
+        df = pd.DataFrame(candles)
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        df = df.dropna(subset=['open', 'high', 'low', 'close', 'volume'])
+
+        # 4) 기술적 지표 계산 + 가중치 분석
+        tech_data = TechnicalIndicators.calculate_all_indicators(df)
+        strategy = WeightedStrategy()
+        analysis_result = strategy.analyze(tech_data)
+
+        recommendation_text = '기술적 분석 중립'
+        if isinstance(analysis_result.get('recommendation'), dict):
+            recommendation_text = analysis_result['recommendation'].get('description', '기술적 분석 중립')
+
+        # 거래량 통계
+        volume_stats = analysis_result.get('volume_stats', None)
+
+        weighted_signal = {
+            "signal": analysis_result.get('signal', 'neutral'),
+            "score": float(analysis_result.get('combined_score', 0)),
+            "confidence": float(analysis_result.get('confidence', 0)),
+            "indicators": analysis_result.get('indicator_scores', {}),
+            "recommendation": recommendation_text,
+            "volume_stats": volume_stats
+        }
+
+        # 5) AI 분석 (Gemini 사용 가능 시)
+        ai_prediction = {
+            "signal": "HOLD",
+            "confidence": 0.5,
+            "predicted_direction": "NEUTRAL",
+            "current_price": current_price,
+            "analysis": "기술적 지표 기반 분석"
+        }
+
+        if settings.gemini_api_key:
+            try:
+                from app.services.gemini_service import GeminiService
+                gemini = GeminiService(api_key=settings.gemini_api_key)
+                gemini_result = await gemini.analyze_chart(
+                    symbol=symbol,
+                    candles=candles,
+                    current_price=current_price,
+                    timeframe=timeframe
+                )
+                if gemini_result:
+                    ai_prediction = {
+                        "signal": gemini_result.get("signal", "HOLD"),
+                        "confidence": gemini_result.get("confidence", 0.5),
+                        "predicted_direction": gemini_result.get("direction", "NEUTRAL"),
+                        "current_price": current_price,
+                        "analysis": gemini_result.get("analysis", "")
+                    }
+            except Exception as e:
+                logger.warning(f"Gemini analysis failed for stock {symbol}: {e}")
+
+        # 6) 최종 종합 신호
+        ai_signal_value = 1 if ai_prediction["signal"] == "BUY" else -1 if ai_prediction["signal"] == "SELL" else 0
+        final_score = (ai_signal_value * ai_prediction["confidence"] + weighted_signal["score"]) / 2
+        final_signal = "BUY" if final_score > 0.3 else "SELL" if final_score < -0.3 else "HOLD"
+        final_confidence = min(abs(final_score), 1.0)
+
+        return {
+            "symbol": symbol,
+            "current_price": current_price,
+            "timeframe": timeframe,
+            "ai_prediction": ai_prediction,
+            "weighted_signal": weighted_signal,
+            "final_signal": final_signal,
+            "final_confidence": final_confidence
+        }
+
+    except Exception as e:
+        logger.error(f"Stock analysis error for {symbol}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 # ===== Background Workflow =====
 
 async def _stock_analysis_workflow(symbol: str, timeframes: List[str]):
     """
     Stock analysis workflow:
     1. Data collection from Alpha Vantage
-    2. Model training (XGBoost, LSTM)
-    3. Real-time analysis preparation
+    2. Company info update
     """
     try:
         logger.info(f"🚀 [START] Stock analysis workflow for {symbol}")
-        
-        # Stage 1: Data Collection
-        logger.info(f"📊 [Stage 1] Collecting {symbol} data...")
-        for timeframe in timeframes:
+        service = get_stock_data_service()
+
+        # Stage 1: 회사 정보 업데이트
+        logger.info(f"📊 [Stage 1] Fetching company info for {symbol}...")
+        try:
+            info = await service.get_stock_info(symbol)
+            if info:
+                logger.info(f"✅ {symbol} company info: {info.get('name')} ({info.get('sector')})")
+        except Exception as e:
+            logger.warning(f"⚠️ Company info fetch failed: {e}")
+
+        # Stage 2: 데이터 수집 (캐시 워밍)
+        logger.info(f"📊 [Stage 2] Collecting {symbol} historical data...")
+        for tf in timeframes:
             try:
-                # TODO: Call Alpha Vantage API to collect historical data
-                logger.info(f"✅ {symbol} {timeframe} data collected")
+                interval_map = {"1h": "60min", "1d": "1d", "15m": "15min"}
+                av_interval = interval_map.get(tf, "60min")
+                candles = await service.collect_historical_data(symbol, interval=av_interval)
+                logger.info(f"✅ {symbol} {tf}: {len(candles)} candles collected")
             except Exception as e:
-                logger.warning(f"⚠️ {symbol} {timeframe} data collection failed: {str(e)}")
+                logger.warning(f"⚠️ {symbol} {tf} data collection failed: {e}")
                 continue
-        
-        await asyncio.sleep(2)
-        
-        # Stage 2: Model Training
-        logger.info(f"🤖 [Stage 2] Training models for {symbol}...")
-        for timeframe in timeframes:
-            try:
-                # TODO: Call ModelTrainingService to train XGBoost
-                logger.info(f"✅ {symbol} {timeframe} XGBoost training completed")
-                
-                # TODO: Call ModelTrainingService to train LSTM
-                logger.info(f"✅ {symbol} {timeframe} LSTM training completed")
-            except Exception as e:
-                logger.warning(f"⚠️ {symbol} {timeframe} model training failed: {str(e)}")
-                continue
-        
-        await asyncio.sleep(2)
-        
-        # Stage 3: Real-time Analysis Preparation
-        logger.info(f"📡 [Stage 3] Preparing real-time analysis for {symbol}...")
-        logger.info(f"✅ {symbol} ready for real-time analysis")
-        
+
+        # Stage 3: 현재가 조회
+        logger.info(f"📡 [Stage 3] Fetching current price for {symbol}...")
+        try:
+            price = await service.get_current_price(symbol)
+            if price:
+                logger.info(f"✅ {symbol} current price: ${price}")
+        except Exception as e:
+            logger.warning(f"⚠️ Price fetch failed: {e}")
+
         logger.info(f"🎉 [COMPLETE] Stock analysis workflow for {symbol} completed")
-        
-    except Exception as e:
-        logger.error(f"❌ Stock analysis workflow error for {symbol}: {str(e)}")
-
-
-# ===== Stock Search API =====
-
-# Popular US stocks list (S&P 500 top stocks)
-POPULAR_STOCKS = [
-    {"symbol": "AAPL", "name": "Apple Inc.", "sector": "Technology"},
-    {"symbol": "MSFT", "name": "Microsoft Corporation", "sector": "Technology"},
-    {"symbol": "GOOGL", "name": "Alphabet Inc. Class A", "sector": "Technology"},
-    {"symbol": "GOOG", "name": "Alphabet Inc. Class C", "sector": "Technology"},
-    {"symbol": "AMZN", "name": "Amazon.com Inc.", "sector": "Consumer Cyclical"},
-    {"symbol": "NVDA", "name": "NVIDIA Corporation", "sector": "Technology"},
-    {"symbol": "META", "name": "Meta Platforms Inc.", "sector": "Technology"},
-    {"symbol": "TSLA", "name": "Tesla Inc.", "sector": "Consumer Cyclical"},
-    {"symbol": "BRK.B", "name": "Berkshire Hathaway Inc. Class B", "sector": "Financial Services"},
-    {"symbol": "LLY", "name": "Eli Lilly and Company", "sector": "Healthcare"},
-    {"symbol": "V", "name": "Visa Inc.", "sector": "Financial Services"},
-    {"symbol": "UNH", "name": "UnitedHealth Group Incorporated", "sector": "Healthcare"},
-    {"symbol": "XOM", "name": "Exxon Mobil Corporation", "sector": "Energy"},
-    {"symbol": "JPM", "name": "JPMorgan Chase & Co.", "sector": "Financial Services"},
-    {"symbol": "JNJ", "name": "Johnson & Johnson", "sector": "Healthcare"},
-    {"symbol": "MA", "name": "Mastercard Incorporated", "sector": "Financial Services"},
-    {"symbol": "PG", "name": "The Procter & Gamble Company", "sector": "Consumer Defensive"},
-    {"symbol": "AVGO", "name": "Broadcom Inc.", "sector": "Technology"},
-    {"symbol": "HD", "name": "The Home Depot Inc.", "sector": "Consumer Cyclical"},
-    {"symbol": "CVX", "name": "Chevron Corporation", "sector": "Energy"},
-    {"symbol": "ABBV", "name": "AbbVie Inc.", "sector": "Healthcare"},
-    {"symbol": "MRK", "name": "Merck & Co. Inc.", "sector": "Healthcare"},
-    {"symbol": "COST", "name": "Costco Wholesale Corporation", "sector": "Consumer Defensive"},
-    {"symbol": "KO", "name": "The Coca-Cola Company", "sector": "Consumer Defensive"},
-    {"symbol": "PEP", "name": "PepsiCo Inc.", "sector": "Consumer Defensive"},
-    {"symbol": "ADBE", "name": "Adobe Inc.", "sector": "Technology"},
-    {"symbol": "TMO", "name": "Thermo Fisher Scientific Inc.", "sector": "Healthcare"},
-    {"symbol": "NFLX", "name": "Netflix Inc.", "sector": "Communication Services"},
-    {"symbol": "WMT", "name": "Walmart Inc.", "sector": "Consumer Defensive"},
-    {"symbol": "CRM", "name": "Salesforce Inc.", "sector": "Technology"},
-    {"symbol": "BAC", "name": "Bank of America Corporation", "sector": "Financial Services"},
-    {"symbol": "ORCL", "name": "Oracle Corporation", "sector": "Technology"},
-    {"symbol": "AMD", "name": "Advanced Micro Devices Inc.", "sector": "Technology"},
-    {"symbol": "CSCO", "name": "Cisco Systems Inc.", "sector": "Technology"},
-    {"symbol": "ACN", "name": "Accenture plc", "sector": "Technology"},
-    {"symbol": "NKE", "name": "NIKE Inc.", "sector": "Consumer Cyclical"},
-    {"symbol": "TXN", "name": "Texas Instruments Incorporated", "sector": "Technology"},
-    {"symbol": "LIN", "name": "Linde plc", "sector": "Basic Materials"},
-    {"symbol": "QCOM", "name": "QUALCOMM Incorporated", "sector": "Technology"},
-    {"symbol": "ABT", "name": "Abbott Laboratories", "sector": "Healthcare"},
-    {"symbol": "INTC", "name": "Intel Corporation", "sector": "Technology"},
-    {"symbol": "CMCSA", "name": "Comcast Corporation", "sector": "Communication Services"},
-    {"symbol": "DHR", "name": "Danaher Corporation", "sector": "Healthcare"},
-    {"symbol": "PM", "name": "Philip Morris International Inc.", "sector": "Consumer Defensive"},
-    {"symbol": "VZ", "name": "Verizon Communications Inc.", "sector": "Communication Services"},
-    {"symbol": "WFC", "name": "Wells Fargo & Company", "sector": "Financial Services"},
-    {"symbol": "DIS", "name": "The Walt Disney Company", "sector": "Communication Services"},
-    {"symbol": "INTU", "name": "Intuit Inc.", "sector": "Technology"},
-    {"symbol": "CAT", "name": "Caterpillar Inc.", "sector": "Industrials"},
-    {"symbol": "IBM", "name": "International Business Machines Corporation", "sector": "Technology"},
-]
-
-
-@router.get("/search")
-async def search_stocks(query: str, limit: int = 20):
-    """Search stocks by symbol or name"""
-    try:
-        query_upper = query.upper().strip()
-
-        if not query_upper:
-            return {
-                "success": True,
-                "symbols": POPULAR_STOCKS[:limit]
-            }
-
-        # Filter stocks by symbol or name
-        results = []
-        for stock in POPULAR_STOCKS:
-            if (query_upper in stock["symbol"].upper() or
-                query_upper in stock["name"].upper()):
-                results.append({
-                    "symbol": stock["symbol"],
-                    "baseAsset": stock["symbol"],
-                    "quoteAsset": "USD",
-                    "name": stock["name"],
-                    "sector": stock["sector"],
-                    "price": 0,  # Will be fetched from Alpha Vantage when added
-                    "priceChange": 0,
-                    "priceChangePercent": 0,
-                    "volume": 0,
-                    "marketCap": 0,
-                    "trend": "neutral"
-                })
-
-        logger.info(f"✅ Stock search: {query} → {len(results)} results")
-        return {
-            "success": True,
-            "symbols": results[:limit]
-        }
 
     except Exception as e:
-        logger.error(f"❌ Stock search failed: {str(e)}")
-        return {
-            "success": False,
-            "symbols": [],
-            "error": str(e)
-        }
+        logger.error(f"❌ Stock analysis workflow error for {symbol}: {e}")

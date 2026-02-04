@@ -255,17 +255,79 @@ class WeightedStrategy:
         return score
 
     def _calculate_volume_score(self, volume: pd.Series) -> pd.Series:
-        """거래량 점수 계산"""
+        """거래량 점수 계산 (종합 통계 기반)"""
         # 거래량 이동평균
-        volume_ma = volume.rolling(window=20).mean()
+        volume_ma_20 = volume.rolling(window=20).mean()
+        volume_ma_50 = volume.rolling(window=50).mean()
 
-        # 거래량 비율
-        volume_ratio = volume / volume_ma
+        # MA 대비 비율
+        ma_20_ratio = volume / volume_ma_20
+        ma_50_ratio = volume / volume_ma_50
 
-        # 거래량 증가: 긍정적 신호
-        score = np.clip((volume_ratio - 1) * 0.5, -1, 1)
+        # 백분위 기반 점수 (rolling 100기간 내 위치)
+        percentile_score = volume.rolling(window=100).apply(
+            lambda x: pd.Series(x).rank(pct=True).iloc[-1], raw=False
+        )
+
+        # 직전 5캔들 대비
+        prev_5_avg = volume.rolling(window=5).mean().shift(1)
+        prev_5_ratio = volume / prev_5_avg
+
+        # Z-score (급등 감지용)
+        vol_std = volume.rolling(window=20).std()
+        z_score = (volume - volume_ma_20) / vol_std
+
+        # 종합 점수: 백분위(40%) + MA20 비율(30%) + 급등 보너스(30%)
+        base_score = (percentile_score - 0.5) * 2  # -1 ~ 1 범위로 변환
+        ma_score = np.clip((ma_20_ratio - 1) * 0.5, -1, 1)
+        spike_bonus = np.clip(z_score * 0.3, -0.5, 0.5)  # 급등 시 보너스
+
+        score = np.clip(base_score * 0.4 + ma_score * 0.3 + spike_bonus * 0.3, -1, 1)
 
         return score
+
+    def calculate_volume_stats(self, volume: pd.Series) -> Dict[str, Any]:
+        """거래량 종합 통계 계산 (최신 캔들 기준)"""
+        if volume.empty or len(volume) < 5:
+            return {}
+
+        current = float(volume.iloc[-1])
+        vol_avg = float(volume.mean())
+        vol_max = float(volume.max())
+        vol_min = float(volume.min())
+        vol_std = float(volume.std())
+
+        # MA 대비 비율
+        ma_20 = float(volume.rolling(window=20).mean().iloc[-1]) if len(volume) >= 20 else vol_avg
+        ma_50 = float(volume.rolling(window=50).mean().iloc[-1]) if len(volume) >= 50 else vol_avg
+
+        ma_20_ratio = current / ma_20 if ma_20 > 0 else 0
+        ma_50_ratio = current / ma_50 if ma_50 > 0 else 0
+
+        # 백분위
+        percentile = float((volume < current).sum() / len(volume) * 100)
+
+        # 직전 5캔들 대비
+        prev_5_avg = float(volume.iloc[-6:-1].mean()) if len(volume) >= 6 else vol_avg
+        prev_5_ratio = current / prev_5_avg if prev_5_avg > 0 else 0
+
+        # Z-score & 급등 감지
+        z_score = (current - vol_avg) / vol_std if vol_std > 0 else 0
+        is_spike = z_score > 2.0
+
+        return {
+            'current_volume': current,
+            'ma_20_ratio': round(ma_20_ratio, 2),
+            'ma_50_ratio': round(ma_50_ratio, 2),
+            'percentile': round(percentile, 1),
+            'prev_5_ratio': round(prev_5_ratio, 2),
+            'is_spike': is_spike,
+            'avg': round(vol_avg, 2),
+            'max': round(vol_max, 2),
+            'min': round(vol_min, 2),
+            'std': round(vol_std, 2),
+            'z_score': round(z_score, 2),
+        }
 
     def calculate_combined_score(self, df: pd.DataFrame) -> pd.Series:
         """
@@ -353,6 +415,9 @@ class WeightedStrategy:
             if col.endswith('_score') and col != 'combined_score':
                 indicator_scores[col] = latest[col]
 
+        # 거래량 종합 통계
+        volume_stats = self.calculate_volume_stats(df['volume'])
+
         result = {
             'timestamp': df_with_scores.index[-1],
             'price': latest['close'],
@@ -368,6 +433,7 @@ class WeightedStrategy:
                 'ema_26': latest.get('ema_26'),
                 'stoch_k': latest.get('stoch_k'),
             },
+            'volume_stats': volume_stats,
             'recommendation': self._get_recommendation(signal, confidence, latest['close'])
         }
 

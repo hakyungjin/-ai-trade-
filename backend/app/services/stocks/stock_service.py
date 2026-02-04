@@ -22,13 +22,14 @@ class AlphaVantageService:
         Args:
             api_key: Alpha Vantage API key (can be set via environment variable API_KEY_ALPHA_VANTAGE)
         """
-        from app.config import settings
+        from app.config import get_settings
+        settings = get_settings()
         self.api_key = api_key or settings.alpha_vantage_api_key
         
         if not self.api_key:
             logger.warning("Alpha Vantage API key not configured")
         
-        self.rate_limit_delay = 0.25  # 5 requests/min for free tier = 1 req per 12 seconds
+        self.rate_limit_delay = 12  # 5 requests/min for free tier = 1 req per 12 seconds
         self.last_request_time = None
     
     async def _rate_limit_wait(self):

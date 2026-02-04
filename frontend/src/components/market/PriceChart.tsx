@@ -13,7 +13,7 @@ import {
   Cell,
 } from 'recharts';
 import { TrendingUp, TrendingDown, Minus, RefreshCw } from 'lucide-react';
-import { marketApi, getWebSocketUrl } from '@/api/client';
+import { marketApi, stockApi, getWebSocketUrl } from '@/api/client';
 
 interface Candle {
   timestamp: number;
@@ -27,6 +27,7 @@ interface Candle {
 interface PriceChartProps {
   symbol: string;
   onSymbolChange?: (symbol: string) => void;
+  isStock?: boolean;
 }
 
 const INTERVALS = [
@@ -38,7 +39,7 @@ const INTERVALS = [
   { value: '1d', label: '1일' },
 ];
 
-export function PriceChart({ symbol }: PriceChartProps) {
+export function PriceChart({ symbol, isStock = false }: PriceChartProps) {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [selectedInterval, setSelectedInterval] = useState('1m');
   const [currentPrice, setCurrentPrice] = useState(0);
@@ -77,7 +78,9 @@ export function PriceChart({ symbol }: PriceChartProps) {
 
     // 새 데이터 로드 및 연결
     loadInitialData();
-    connectWebSocket();
+    if (!isStock) {
+      connectWebSocket();
+    }
 
     return () => {
       mountedRef.current = false;
@@ -95,7 +98,9 @@ export function PriceChart({ symbol }: PriceChartProps) {
   const loadInitialData = async () => {
     try {
       setIsLoading(true);
-      const response = await marketApi.getKlines(symbol, selectedInterval, 200);
+      const response = isStock
+        ? await stockApi.getKlines(symbol, selectedInterval, 200)
+        : await marketApi.getKlines(symbol, selectedInterval, 200);
       if (response.data.success && mountedRef.current) {
         setCandles(response.data.data);
         if (response.data.data.length > 0) {
@@ -311,7 +316,7 @@ export function PriceChart({ symbol }: PriceChartProps) {
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <CardTitle className="text-xl">{symbol.replace('USDT', '')}/USDT</CardTitle>
+            <CardTitle className="text-xl">{isStock ? symbol : `${symbol.replace('USDT', '')}/USDT`}</CardTitle>
             <div className="flex items-center gap-2">
               <span className="text-2xl font-bold">${formatPrice(currentPrice)}</span>
               <Badge
