@@ -1,7 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
 import {
-  TrendingUp,
-  TrendingDown,
   RefreshCw,
   BarChart3,
   Sparkles,
@@ -13,10 +11,9 @@ import {
   Coins,
   LineChart,
   Brain,
-  Target,
   Activity,
-  Award,
-  AlertCircle,
+  TrendingUp,
+  Zap,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -24,7 +21,7 @@ import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
-import { marketApi, aiApi, apiClient, feedbackApi, modelApi } from '@/api/client';
+import { marketApi, aiApi, apiClient, modelApi } from '@/api/client';
 import { PriceChart } from './market';
 import { useTradingStore } from '@/store/tradingStore';
 
@@ -42,6 +39,20 @@ interface MonitoredCoin {
   candle_count: number;
 }
 
+interface VolumeStats {
+  current_volume: number;
+  ma_20_ratio: number;
+  ma_50_ratio: number;
+  percentile: number;
+  prev_5_ratio: number;
+  is_spike: boolean;
+  avg: number;
+  max: number;
+  min: number;
+  std: number;
+  z_score: number;
+}
+
 interface WeightedAnalysis {
   final_signal: 'BUY' | 'SELL' | 'HOLD';
   final_confidence: number;
@@ -51,6 +62,7 @@ interface WeightedAnalysis {
     confidence: number;
     indicators?: Record<string, any>;
     recommendation?: string;
+    volume_stats?: VolumeStats;
   };
   ai_prediction?: {
     signal: string;
@@ -59,32 +71,7 @@ interface WeightedAnalysis {
   };
 }
 
-// interface ModelInfo {
-//   name: string;
-//   type: 'XGBoost' | 'LSTM' | 'Ensemble';
-//   classes: number;
-//   features: number;
-//   lastUpdated?: string;
-// }
-
-interface ModelAccuracy {
-  period_days: number;
-  total_trades: number;
-  wins: number;
-  losses: number;
-  win_rate: number;
-  ai_predictions: number;
-  ai_correct: number;
-  ai_accuracy: number;
-  total_pnl: number;
-  avg_pnl_percent: number;
-}
-
-interface SignalStats {
-  BUY: { count: number; wins: number; win_rate: number; total_pnl: number; avg_pnl: number };
-  SELL: { count: number; wins: number; win_rate: number; total_pnl: number; avg_pnl: number };
-  HOLD: { count: number; wins: number; win_rate: number; total_pnl: number; avg_pnl: number };
-}
+// Removed unused interfaces: ModelAccuracy, SignalStats
 
 export function CoinAnalysis() {
   // 전역 상태에서 선택된 심볼과 마켓 타입 가져오기
@@ -178,12 +165,8 @@ export function CoinAnalysis() {
     }, 3000);
   };
 
-  // 심볼 변경 시 모델 성능 데이터 리셋
+  // 심볼 변경 시 학습 상태 리셋
   useEffect(() => {
-    setModelAccuracy(null);
-    setSignalStats(null);
-    setAvailableModels([]);
-    // setModelExists(null);
     setTrainingStatus(null);
     setIsTraining(false);
   }, [selectedSymbol]);
@@ -716,6 +699,113 @@ export function CoinAnalysis() {
               )}
             </CardContent>
           </Card>
+
+          {/* 거래량 종합 통계 */}
+          {weightedAnalysis?.weighted_signal?.volume_stats && (
+            <Card className="border-emerald-500/30">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center justify-between">
+                  <span className="flex items-center gap-2">
+                    <Activity className="w-4 h-4 text-emerald-500" />
+                    거래량 통계
+                  </span>
+                  {weightedAnalysis.weighted_signal.volume_stats.is_spike && (
+                    <Badge variant="destructive" className="text-xs flex items-center gap-1">
+                      <Zap className="w-3 h-3" />
+                      급등
+                    </Badge>
+                  )}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {(() => {
+                  const vs = weightedAnalysis.weighted_signal!.volume_stats!;
+                  return (
+                    <>
+                      {/* 백분위 바 */}
+                      <div>
+                        <div className="flex justify-between mb-1">
+                          <span className="text-xs text-muted-foreground">백분위</span>
+                          <span className="text-xs font-semibold">{vs.percentile}%</span>
+                        </div>
+                        <Progress value={vs.percentile} className="h-2" />
+                      </div>
+
+                      {/* MA 대비 */}
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">MA20 대비</span>
+                          <span className={cn(
+                            'font-mono font-semibold',
+                            vs.ma_20_ratio >= 1.5 ? 'text-green-600' :
+                            vs.ma_20_ratio <= 0.5 ? 'text-red-600' : 'text-foreground'
+                          )}>
+                            {vs.ma_20_ratio}x
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">MA50 대비</span>
+                          <span className={cn(
+                            'font-mono font-semibold',
+                            vs.ma_50_ratio >= 1.5 ? 'text-green-600' :
+                            vs.ma_50_ratio <= 0.5 ? 'text-red-600' : 'text-foreground'
+                          )}>
+                            {vs.ma_50_ratio}x
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* 직전 캔들 대비 & Z-score */}
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground flex items-center gap-1">
+                            <TrendingUp className="w-3 h-3" />
+                            직전 5캔들
+                          </span>
+                          <span className={cn(
+                            'font-mono font-semibold',
+                            vs.prev_5_ratio >= 1.5 ? 'text-green-600' :
+                            vs.prev_5_ratio <= 0.5 ? 'text-red-600' : 'text-foreground'
+                          )}>
+                            {vs.prev_5_ratio}x
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Z-score</span>
+                          <span className={cn(
+                            'font-mono font-semibold',
+                            vs.z_score > 2 ? 'text-red-600' :
+                            vs.z_score > 1 ? 'text-amber-500' : 'text-foreground'
+                          )}>
+                            {vs.z_score}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* 전체 범위 */}
+                      <div className="pt-2 border-t border-dashed">
+                        <div className="text-xs font-semibold text-muted-foreground mb-1">범위 비교</div>
+                        <div className="grid grid-cols-3 gap-1 text-xs text-center">
+                          <div>
+                            <div className="text-muted-foreground">최소</div>
+                            <div className="font-mono">{vs.min >= 1e6 ? `${(vs.min / 1e6).toFixed(1)}M` : vs.min >= 1e3 ? `${(vs.min / 1e3).toFixed(1)}K` : vs.min.toFixed(0)}</div>
+                          </div>
+                          <div>
+                            <div className="text-muted-foreground">평균</div>
+                            <div className="font-mono">{vs.avg >= 1e6 ? `${(vs.avg / 1e6).toFixed(1)}M` : vs.avg >= 1e3 ? `${(vs.avg / 1e3).toFixed(1)}K` : vs.avg.toFixed(0)}</div>
+                          </div>
+                          <div>
+                            <div className="text-muted-foreground">최대</div>
+                            <div className="font-mono">{vs.max >= 1e6 ? `${(vs.max / 1e6).toFixed(1)}M` : vs.max >= 1e3 ? `${(vs.max / 1e3).toFixed(1)}K` : vs.max.toFixed(0)}</div>
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
+              </CardContent>
+            </Card>
+          )}
 
           {/* 모니터링 코인 목록 */}
           <Card>
