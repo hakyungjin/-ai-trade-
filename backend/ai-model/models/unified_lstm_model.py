@@ -210,7 +210,7 @@ def create_unified_model(
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-    print(f"✅ Unified LSTM Model created:")
+    print(f"[OK] Unified LSTM Model created:")
     print(f"   - Total parameters: {total_params:,}")
     print(f"   - Trainable parameters: {trainable_params:,}")
     print(f"   - Device: {device}")
@@ -220,7 +220,7 @@ def create_unified_model(
 
 if __name__ == "__main__":
     # 테스트
-    print("🧪 Testing Unified LSTM Model...")
+    print("[TEST] Testing Unified LSTM Model...")
 
     # 모델 생성
     model = create_unified_model(
@@ -239,21 +239,21 @@ if __name__ == "__main__":
     dummy_time_series = torch.randn(batch_size, sequence_length, num_features)
     dummy_asset_ids = torch.randint(0, 200, (batch_size,))
 
-    print(f"\n📊 Input shapes:")
+    print(f"\n[DATA] Input shapes:")
     print(f"   - Time series: {dummy_time_series.shape}")
     print(f"   - Asset IDs: {dummy_asset_ids.shape}")
 
     # Forward pass
     logits = model(dummy_time_series, dummy_asset_ids)
-    print(f"\n📈 Output shape: {logits.shape}")
+    print(f"\n[OUT] Output shape: {logits.shape}")
 
     # Prediction
     predictions, probabilities = model.predict(dummy_time_series, dummy_asset_ids)
-    print(f"\n🎯 Predictions: {predictions}")
+    print(f"\n[PRED] Predictions: {predictions}")
     print(f"   Probabilities shape: {probabilities.shape}")
 
     # Embedding 확인
     btc_embedding = model.get_embedding(0)  # BTC = asset_id 0
-    print(f"\n🪙 BTC Embedding: {btc_embedding[:5]}... (first 5 dims)")
+    print(f"\n[EMB] BTC Embedding: {btc_embedding[:5]}... (first 5 dims)")
 
-    print("\n✅ Test passed!")
+    print("\n[OK] Test passed!")

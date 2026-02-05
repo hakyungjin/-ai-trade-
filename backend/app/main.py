@@ -83,8 +83,12 @@ app.add_middleware(
         "http://localhost:5173",
         "http://localhost:5174",
         "https://ai-trader-e69ae.web.app",
-        "https://attract--web.web.app"
+        "https://attract--web.web.app",
+        # Railway & Vercel 배포용
+        "https://*.up.railway.app",
+        "https://*.vercel.app",
     ],
+    allow_origin_regex=r"https://.*\.(railway\.app|vercel\.app)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -5,7 +5,6 @@
 """
 
 import numpy as np
-import faiss
 import pickle
 import logging
 from typing import List, Dict, Any, Optional, Tuple
@@ -13,6 +12,14 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+
+# FAISS는 optional (메모리 절약)
+try:
+    import faiss
+    FAISS_AVAILABLE = True
+except ImportError:
+    FAISS_AVAILABLE = False
+    faiss = None
 
 from app.models.vector_pattern import VectorPattern, VectorSimilarity
 from app.services.technical_indicators import TechnicalIndicators
@@ -36,6 +43,10 @@ class VectorPatternService:
 
     def _load_or_create_index(self):
         """기존 인덱스 로드 또는 새로 생성"""
+        if not FAISS_AVAILABLE:
+            logger.warning("FAISS not available - vector pattern search disabled")
+            return
+
         try:
             if self.index_path.exists() and self.metadata_path.exists():
                 self.index = faiss.read_index(str(self.index_path))
@@ -43,13 +54,17 @@ class VectorPatternService:
                 return
         except Exception as e:
             logger.warning(f"Failed to load index: {e}")
-        
+
         # 새 인덱스 생성
         self.index = faiss.IndexFlatL2(self.vector_dim)
         logger.info(f"Created new FAISS index for {self.symbol}")
 
     async def build_index_from_history(self):
         """과거 1년 데이터로 FAISS 인덱스 구축"""
+        if not FAISS_AVAILABLE:
+            logger.warning("FAISS not available - skipping index build")
+            return 0
+
         try:
             logger.info(f"🔨 Building vector index for {self.symbol} from 1-year history...")
             
@@ -217,6 +232,9 @@ class VectorPatternService:
         similarity_threshold: float = 0.75
     ) -> List[Dict[str, Any]]:
         """현재 지표와 유사한 과거 패턴 검색"""
+        if not FAISS_AVAILABLE or self.index is None:
+            return []
+
         try:
             if self.index.ntotal == 0:
                 logger.warning("FAISS index is empty")
